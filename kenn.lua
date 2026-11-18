@@ -1,8 +1,12 @@
---[[ KENNEX HUB v31 · Volleyball Legends
+--[[ KENNEX HUB v32 · Volleyball Legends
      · abas: COMBATE / VISUAL / MOVER / ACAO / MOVIM
      · v31: cartoes com AutomaticSize + build por pagina isolado
      · v31: movimento corrigido (rot no ar, cooldown de pulo, restore de ws/jp)
      · hitbox = esfera cliente na bola · releaseAll por hide()
+     · v32: esfera robusta (CanTouch fixo, raio com fallback, clamp)
+     · v32: trajetoria com exclusao da bola inteira + guarda de tempo
+     · v32: bloco da bola isolado em safe (nao derruba ESP)
+     · v32: registro de bola renova timestamp · alvo forcado expira
 ]]
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -399,7 +403,7 @@ local function buildUI()
         BackgroundTransparency = 1, Text = "one hub · multiple plays", Font = Enum.Font.Gotham,
         TextSize = 8, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, head)
     local pill = mk("TextLabel", { Size = UDim2.fromOffset(28, 12), Position = UDim2.fromOffset(12, 31),
-        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V31",
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V32",
         Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2, ZIndex = 6 }, head)
     mk("UICorner", { CornerRadius = UDim.new(0, 4) }, pill)
     local dot = mk("Frame", { Size = UDim2.fromOffset(6, 6), Position = UDim2.fromOffset(45, 34),
@@ -699,6 +703,7 @@ local function computeRadius(b)
             mx = Vector3.new(math.max(mx.X, hi.X), math.max(mx.Y, hi.Y), math.max(mx.Z, hi.Z))
         end
     end
+    if not mn or not mx then return 1 end
     return math.clamp((mx - mn).Magnitude * 0.5, 0.4, CFG.radCap)
 end
 
@@ -957,21 +962,28 @@ end
 local function applyBox(ball, root)
     if not (State.hbOn and State.hbClient) then killBox() return end
     local base = S.baseRad[ball]
-    if not base then killBox() return end
-    local d = base * State.hbMult * 2
-    if not S.box or S.box.Parent ~= ball then
-        killBox()
-        S.box = mk("Part", { Name = "KNXBox", Shape = Enum.PartType.Ball,
-            Size = Vector3.new(d, d, d), Transparency = 1, CanCollide = false,
-            Anchored = true, Massless = true, CastShadow = false, CFrame = root.CFrame,
-            Parent = ball, CanTouch = true, CanQuery = State.hbQuery })
-    else
-        S.box.CanQuery = State.hbQuery
-        if math.abs(S.box.Size.X - d) > 0.05 then
-            safe(function() S.box.Size = Vector3.new(d, d, d) end)
-        end
-        S.box.CFrame = root.CFrame
+    if not base then
+        base = computeRadius(ball)
+        S.baseRad[ball] = base
     end
+    local d = math.clamp(base * State.hbMult * 2, 0.6, CFG.maxOut * 2)
+    local box = S.box
+    if not box or box.Parent ~= ball then
+        killBox()
+        box = mk("Part", { Name = "KNXBox", Shape = Enum.PartType.Ball,
+            Size = Vector3.new(d, d, d), Transparency = 1, CanCollide = false,
+            Anchored = true, Massless = true, CastShadow = false,
+            CanTouch = true, CanQuery = State.hbQuery, CFrame = root.CFrame,
+            Parent = ball })
+        S.box = box
+    else
+        if math.abs(box.Size.X - d) > 0.05 then
+            safe(function() box.Size = Vector3.new(d, d, d) end)
+        end
+        box.CFrame = root.CFrame
+    end
+    box.CanTouch = true
+    box.CanQuery = State.hbQuery
 end
 
 --// ===================== BOLAS =====================
@@ -1006,12 +1018,16 @@ local function modelOk(b)
             end
         end
     end
-    return soft and mag <= CFG.maxModelMag and n <= CFG.maxModelParts
+    return (soft or n <= 4) and mag <= CFG.maxModelMag and n <= CFG.maxModelParts
 end
 
 local function register(b)
-    if not b or not b.Parent or S.balls[b] then return end
+    if not b or not b.Parent then return end
     if not (b:IsA("Model") or b:IsA("BasePart")) then return end
+    if S.balls[b] then
+        if os.clock() - S.balls[b] > 5 then S.balls[b] = os.clock() end
+        return
+    end
     if not modelOk(b) then return end
     if not ballRoot(b) then return end
     if not S.baseRad[b] then S.baseRad[b] = computeRadius(b) end
@@ -1190,7 +1206,7 @@ local function applyCharge()
     if os.clock() - S.chgT < 0.1 then return end
     S.chgT = os.clock()
     local host, key = chargeTarget()
-    if not host then return end
+    if not host or not key then return end
     local cur = host:GetAttribute(key)
     local v = State.chargePct
     if type(cur) == "number" and cur <= 1.5 then v = v / 100 end
@@ -1348,7 +1364,19 @@ local function doJump()
     safe(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
 end
 
-local function landPoint(pos, vel)
+local function ballExcl(b, list)
+    if not b then return list end
+    if b:IsA("BasePart") then
+        list[#list + 1] = b
+    else
+        for _, d in ipairs(b:GetDescendants()) do
+            if d:IsA("BasePart") then list[#list + 1] = d end
+        end
+    end
+    return list
+end
+
+local function landPoint(pos, vel, ball)
     local g = workspace.Gravity
     if g <= 0 then return nil end
     local rp = RaycastParams.new()
@@ -1358,19 +1386,21 @@ local function landPoint(pos, vel)
         if p.Character then f[#f + 1] = p.Character end
     end
     if S.box then f[#f + 1] = S.box end
-    local br = S.ball and ballRoot(S.ball)
-    if br then f[#f + 1] = br end
+    ballExcl(ball, f)
     rp.FilterDescendantsInstances = f
     local fh = workspace:Raycast(pos, Vector3.new(0, -400, 0), rp)
     if not fh then return nil end
     local gy = fh.Position.Y
-    local a, b, c0 = -0.5 * g, vel.Y, pos.Y - gy
-    local disc = b * b - 4 * a * c0
+    local c0 = pos.Y - gy
+    if c0 <= 0.05 then return nil end
+    local a, vy = -0.5 * g, vel.Y
+    local disc = vy * vy - 4 * a * c0
     if disc < 0 then return nil end
     local sq = math.sqrt(disc)
-    local t = math.max((-b + sq) / (2 * a), (-b - sq) / (2 * a))
-    if t <= 0 or t > 6 then return nil end
+    local t = math.max((-vy + sq) / (2 * a), (-vy - sq) / (2 * a))
+    if t <= 0.02 or t > 6 then return nil end
     local h = pos + Vector3.new(vel.X, 0, vel.Z) * t
+    if (h - pos).Magnitude < 0.4 then return nil end
     return Vector3.new(h.X, gy + 0.4, h.Z), t
 end
 
@@ -1527,7 +1557,13 @@ local function stepDraw(dt)
     if os.clock() - S.scanT > CFG.scan then
         S.scanT = os.clock()
         scan()
-        if S.forced and not S.forced.Parent then S.forced = nil end
+        if S.forced then
+            local fr = ballRoot(S.forced)
+            if not S.forced.Parent or not fr
+                or (fr.Position - r.Position).Magnitude > 250 then
+                S.forced = nil
+            end
+        end
         if not S.forced then setBall(pickBall()) end
     end
 
@@ -1542,8 +1578,9 @@ local function stepDraw(dt)
     if UI.dot then UI.dot.BackgroundColor3 = ball and C.green or C.red end
 
     if ball then
-        local root = ballRoot(ball)
-        if root then
+        safe(function()
+            local root = ballRoot(ball)
+            if not root then return end
             applyBox(ball, root)
             if S.prev then
                 local raw = (root.Position - S.prev) / math.max(dt, 1 / 240)
@@ -1587,13 +1624,13 @@ local function stepDraw(dt)
 
             local lp, ltime
             if S.vel.Magnitude > 6 then
-                lp, ltime = landPoint(root.Position, S.vel)
+                lp, ltime = landPoint(root.Position, S.vel, ball)
             end
 
-            if State.traj and lp and S.vel.Magnitude > 6 then
+            if State.traj and lp and ltime and ltime > 0.05 then
                 local p, v, g = root.Position, S.vel, workspace.Gravity
                 for i = 1, 12 do
-                    local t = (ltime or 1) * (i / 12)
+                    local t = ltime * (i / 12)
                     local sp = p + v * t + Vector3.new(0, -0.5 * g * t * t, 0)
                     local sps, son = c:WorldToViewportPoint(sp)
                     if son and sps.Z > 0 then
@@ -1603,25 +1640,24 @@ local function stepDraw(dt)
                 end
             end
 
-            if lp and State.traj then
+            if lp and ltime and State.traj then
                 local lpos, lon = c:WorldToViewportPoint(lp)
                 if lon and lpos.Z > 0 then
                     local edge = c:WorldToViewportPoint(lp + c.CFrame.RightVector * 3)
                     local pr = math.clamp(math.abs(edge.X - lpos.X), 6, 300)
                     grab(pool.land, makeCircle, D3.land).set(lpos.X, lpos.Y, pr, D3.land, true)
-                    if ltime then
-                        grab(pool.land, makeText, D3.land).set(lpos.X, lpos.Y - pr - 12,
-                            ("%.1fs"):format(ltime), D3.land, true)
-                    end
+                    grab(pool.land, makeText, D3.land).set(lpos.X, lpos.Y - pr - 12,
+                        ("%.1fs"):format(ltime), D3.land, true)
                 end
             end
 
-            local nearLand = lp and (lp - r.Position).Magnitude <= State.reach
+            local nearLand = lp and ltime and ltime < 0.9
+                and (lp - r.Position).Magnitude <= State.reach
             local high = (root.Position.Y - r.Position.Y) >= State.spikeH and dist <= State.spikeR
 
             if State.jump and (high or (nearLand and S.vel.Y > 2)) then doJump() end
             if (State.autoRecv and nearLand) or (State.autoSpike and high) then doAttack() end
-        end
+        end)
     end
 
     if State.esp then
@@ -1758,5 +1794,5 @@ task.spawn(function()
     resolveHB()
     cacheBase()
     sweepLive()
-    out("v31 pronto · place suportado:", S.supported)
+    out("v32 pronto · place suportado:", S.supported)
 end)
