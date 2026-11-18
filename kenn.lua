@@ -1,4 +1,4 @@
---[[ KENNEX HUB v32 · Volleyball Legends
+--[[ KENNEX HUB v33 · Volleyball Legends
      · abas: COMBATE / VISUAL / MOVER / ACAO / MOVIM
      · v31: cartoes com AutomaticSize + build por pagina isolado
      · v31: movimento corrigido (rot no ar, cooldown de pulo, restore de ws/jp)
@@ -7,6 +7,9 @@
      · v32: trajetoria com exclusao da bola inteira + guarda de tempo
      · v32: bloco da bola isolado em safe (nao derruba ESP)
      · v32: registro de bola renova timestamp · alvo forcado expira
+     · v33: SUPER SPIKE (TSH) = corre reto, pula e bate com a barra cheia
+     · v33: modo de segurar botao para estilos de carga por hold
+     · v33: carga por atributo tambem le NumberValue/IntValue
 ]]
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -52,6 +55,8 @@ local S = {
     abilBtn = nil, abilT = 0, abilScanT = 0, chgT = 0, chgKey = nil, chgHost = nil,
     tiltHold = 0, netCache = nil, netT = 0, abilFail = 0,
     jumpT = 0, wsBase = nil, jpBase = nil, rotBase = nil,
+    charging = false, runOn = false, runStart = 0, runEnd = 0, runJumped = false,
+    runDone = 0, runWs = nil, superDone = 0,
 }
 
 local function bind(c) S.conns[#S.conns + 1] = c; return c end
@@ -68,6 +73,8 @@ local State = {
     sJump = 1, sTilt = 1, sServe = 1,
     autoAbility = false, abilDelay = 0.35, forceCharge = false, chargePct = 100,
     tiltMode = 1,
+    superSpike = false, runTime = 0.7, runSpeed = 28,
+    holdCharge = false, chargeHold = 0.5,
 }
 local MODES = { "CLIQUE NA BOLA", "BOTAO", "MANUAL" }
 local TILTS = { "OFF", "RETA", "DIAGONAL", "INVERTIDO", "REDE" }
@@ -403,7 +410,7 @@ local function buildUI()
         BackgroundTransparency = 1, Text = "one hub · multiple plays", Font = Enum.Font.Gotham,
         TextSize = 8, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, head)
     local pill = mk("TextLabel", { Size = UDim2.fromOffset(28, 12), Position = UDim2.fromOffset(12, 31),
-        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V32",
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V33",
         Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2, ZIndex = 6 }, head)
     mk("UICorner", { CornerRadius = UDim.new(0, 4) }, pill)
     local dot = mk("Frame", { Size = UDim2.fromOffset(6, 6), Position = UDim2.fromOffset(45, 34),
@@ -628,11 +635,33 @@ local function buildPages()
         local c1 = card(p, 1, "AUTOMACAO")
         switch(c1, "AUTO RECEPCAO", "autoRecv", 1)
         switch(c1, "AUTO SPIKE", "autoSpike", 2)
-        local c2 = card(p, 2, "LEITURA DE QUEDA")
-        slider(c2, "RAIO DE QUEDA", "reach", 1, 2, 25, function(v) return v .. "st" end)
-        slider(c2, "ALTURA SPIKE", "spikeH", 2, 2, 20, function(v) return v .. "st" end)
-        slider(c2, "RAIO SPIKE", "spikeR", 3, 2, 25, function(v) return v .. "st" end)
-        note(c2, "o clique sai quando a bola cai dentro do raio", 4)
+
+        local c2 = card(p, 2, "SUPER SPIKE · TSH")
+        switch(c2, "SUPER SPIKE", "superSpike", 1)
+        slider(c2, "TEMPO DE CORRIDA", "runTime", 2, 0.15, 1.5,
+            function(v) return ("%.2fs"):format(v) end, 0.05)
+        slider(c2, "VELOCIDADE NA CORRIDA", "runSpeed", 3, 0, 40,
+            function(v) return v == 0 and "padrao" or (v .. "") end, 1)
+        note(c2, "TSH enche a barra correndo reto · o hub corre, pula e bate com a barra cheia", 4)
+        note(c2, "parar de andar esvazia a barra · pular congela · mais tempo = mais forca", 5)
+
+        local c3 = card(p, 3, "LEITURA DE QUEDA")
+        slider(c3, "RAIO DE QUEDA", "reach", 1, 2, 25, function(v) return v .. "st" end)
+        slider(c3, "ALTURA SPIKE", "spikeH", 2, 2, 20, function(v) return v .. "st" end)
+        slider(c3, "RAIO SPIKE", "spikeR", 3, 2, 25, function(v) return v .. "st" end)
+        note(c3, "o clique sai quando a bola cai dentro do raio", 4)
+
+        local c4 = card(p, 4, "CARGA POR SEGURAR")
+        switch(c4, "SEGURAR BOTAO", "holdCharge", 1)
+        slider(c4, "TEMPO SEGURANDO", "chargeHold", 2, 0.08, 2,
+            function(v) return ("%.2fs"):format(v) end, 0.02)
+        note(c4, "para estilos que carregam no hold (Ronin, Jinko) · nao use com o super spike", 3)
+
+        local c5 = card(p, 5, "CARGA POR ATRIBUTO")
+        switch(c5, "FORCAR ATRIBUTO", "forceCharge", 1)
+        slider(c5, "VALOR", "chargePct", 2, 10, 100, function(v) return v .. "%" end, 1)
+        UI.chgNote = note(c5, "alvo: procurando", 3)
+        note(c5, "escreve o valor da barra direto · depende do estilo expor o valor", 4)
     end)
 
     block("MOVIM", function()
@@ -641,18 +670,13 @@ local function buildPages()
         switch(c1, "AUTO HABILIDADE", "autoAbility", 1)
         slider(c1, "INTERVALO", "abilDelay", 2, 0.15, 5, function(v) return ("%.2fs"):format(v) end, 0.05)
         UI.abilNote = note(c1, "aciona a habilidade do estilo (Sanju, TSH, Kijo...)", 3)
-        local c2 = card(p, 2, "CARGA")
-        switch(c2, "CARGA FORCADA", "forceCharge", 1)
-        slider(c2, "CARGA %", "chargePct", 2, 10, 100, function(v) return v .. "%" end, 1)
-        UI.chgNote = note(c2, "atributo: procurando", 3)
-        note(c2, "mantem a carga cheia · so funciona com estilo que carrega", 4)
-        local c3 = card(p, 3, "TILT / DIRECAO")
-        local tiltBtn = button(c3, "TILT: " .. TILTS[State.tiltMode], 1, function()
+        local c2 = card(p, 2, "TILT / DIRECAO")
+        local tiltBtn = button(c2, "TILT: " .. TILTS[State.tiltMode], 1, function()
             State.tiltMode = (State.tiltMode % #TILTS) + 1
             tiltBtn.Text = "TILT: " .. TILTS[State.tiltMode]
             S.tiltHold = os.clock() + 0.4
         end)
-        note(c3, "RETA = pela lateral · DIAGONAL = cruzado · INVERTIDO = troca o lado · REDE = toque na rede", 2)
+        note(c2, "RETA = pela lateral · DIAGONAL = cruzado · INVERTIDO = troca o lado · REDE = toque na rede", 2)
     end)
 
     showTab(1)
@@ -1184,7 +1208,9 @@ local function pressAbility()
 end
 
 local function chargeTarget()
-    if S.chgKey and S.chgHost and S.chgHost.Parent then return S.chgHost, S.chgKey end
+    if S.chgHost and S.chgHost.Parent and (S.chgKey or not S.chgHost:IsA("ValueBase")) then
+        return S.chgHost, S.chgKey
+    end
     S.chgKey, S.chgHost = nil, nil
     local hosts = { LP, LP.Character }
     for _, h in ipairs(hosts) do
@@ -1199,6 +1225,20 @@ local function chargeTarget()
             end
         end
     end
+    local roots = { LP, LP.Character, LP:FindFirstChildOfClass("PlayerGui") }
+    for _, root in ipairs(roots) do
+        if root then
+            for _, d in ipairs(root:GetDescendants()) do
+                if d:IsA("NumberValue") or d:IsA("IntValue") then
+                    local n = string.lower(d.Name)
+                    if string.find(n, "charge", 1, true) or string.find(n, "carga", 1, true) then
+                        S.chgKey, S.chgHost = nil, d
+                        return d, nil
+                    end
+                end
+            end
+        end
+    end
 end
 
 local function applyCharge()
@@ -1206,11 +1246,17 @@ local function applyCharge()
     if os.clock() - S.chgT < 0.1 then return end
     S.chgT = os.clock()
     local host, key = chargeTarget()
-    if not host or not key then return end
-    local cur = host:GetAttribute(key)
+    if not host then return end
     local v = State.chargePct
-    if type(cur) == "number" and cur <= 1.5 then v = v / 100 end
-    safe(function() host:SetAttribute(key, v) end)
+    if key then
+        local cur = host:GetAttribute(key)
+        if type(cur) == "number" and cur <= 1.5 then v = v / 100 end
+        safe(function() host:SetAttribute(key, v) end)
+    else
+        local cur = host.Value
+        if type(cur) == "number" and cur <= 1.5 then v = v / 100 end
+        safe(function() host.Value = v end)
+    end
 end
 
 local function netPart()
@@ -1267,14 +1313,15 @@ local function applyTilt()
 end
 
 --// ===================== INPUT =====================
-press = function(x, y)
+press = function(x, y, holdT)
     local c = cam()
     local vs = c and c.ViewportSize or Vector2.new(720, 1280)
     x = math.clamp(x, 2, vs.X - 2)
     y = math.clamp(y, 2, vs.Y - 2)
+    local h = math.max(holdT or State.hold, 0.012)
     safe(function() VIM:SendMouseMoveEvent(x, y, game) end)
     safe(function() VIM:SendMouseButtonEvent(x, y, 0, true, game, 0) end)
-    task.delay(math.max(State.hold, 0.012), function()
+    task.delay(h, function()
         safe(function() VIM:SendMouseButtonEvent(x, y, 0, false, game, 0) end)
     end)
 end
@@ -1342,13 +1389,21 @@ end
 
 local function doAttack()
     local now = os.clock()
+    if S.charging then return end
     if now - S.lastPress < CFG.cd then return end
     local pos = pressPoint()
     if not pos then return end
     S.lastPress = now
     S.hits += 1
     if State.tiltMode > 1 then safe(applyTilt) end
-    press(pos.X, pos.Y)
+    if State.holdCharge then
+        S.charging = true
+        local t = math.clamp(State.chargeHold, 0.08, 2)
+        press(pos.X, pos.Y, t)
+        task.delay(t + 0.06, function() S.charging = false end)
+    else
+        press(pos.X, pos.Y)
+    end
 end
 
 local function doJump()
@@ -1361,7 +1416,40 @@ local function doJump()
     if st == Enum.HumanoidStateType.Jumping or st == Enum.HumanoidStateType.Freefall then return end
     if st == Enum.HumanoidStateType.Seated or st == Enum.HumanoidStateType.Dead then return end
     S.jumpT = now
-    safe(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+    if State.superSpike then
+        safe(function() VIM:SendKeyEvent(true, Enum.KeyCode.Space, false, game) end)
+        task.delay(0.07, function()
+            safe(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
+        end)
+    else
+        safe(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+    end
+end
+
+--// ===================== CORRIDA DE CARGA =====================
+local function startRun(hum)
+    if S.runOn then return end
+    S.runOn = true
+    S.runStart = os.clock()
+    S.runEnd = S.runStart + State.runTime + 1.4
+    S.runJumped = false
+    if hum then
+        S.runWs = hum.WalkSpeed
+        if State.runSpeed > 0 then safe(function() hum.WalkSpeed = State.runSpeed end) end
+    end
+    safe(function() VIM:SendKeyEvent(true, Enum.KeyCode.W, false, game) end)
+end
+
+local function stopRun(hum)
+    if not S.runOn then return end
+    S.runOn = false
+    S.runJumped = false
+    S.runDone = os.clock()
+    safe(function() VIM:SendKeyEvent(false, Enum.KeyCode.W, false, game) end)
+    if hum and S.runWs then
+        safe(function() hum.WalkSpeed = S.runWs end)
+        S.runWs = nil
+    end
 end
 
 local function ballExcl(b, list)
@@ -1657,6 +1745,31 @@ local function stepDraw(dt)
 
             if State.jump and (high or (nearLand and S.vel.Y > 2)) then doJump() end
             if (State.autoRecv and nearLand) or (State.autoSpike and high) then doAttack() end
+
+            if State.superSpike then
+                local canStart = dist <= State.spikeR and dist >= 4
+                    and (root.Position.Y - r.Position.Y) >= State.spikeH * 0.5
+                if not S.runOn and canStart and os.clock() - S.runDone > 0.25 then
+                    startRun(hum)
+                end
+                if S.runOn then
+                    if dist < 2.6 and not S.runJumped then
+                        S.runStart = math.min(S.runStart, os.clock() - State.runTime)
+                    end
+                    if not S.runJumped and os.clock() - S.runStart >= State.runTime then
+                        S.runJumped = true
+                        doJump()
+                        task.delay(0.12, function() doAttack() end)
+                    end
+                    if S.runJumped and os.clock() - S.runStart > State.runTime + 0.5 then
+                        stopRun(hum)
+                    elseif os.clock() > S.runEnd then
+                        stopRun(hum)
+                    end
+                end
+            elseif S.runOn then
+                stopRun(hum)
+            end
         end)
     end
 
@@ -1702,7 +1815,9 @@ local function stepDraw(dt)
     if os.clock() - S.uiT > 0.25 and UI.stLbl then
         S.uiT = os.clock()
         if UI.chgNote then
-            UI.chgNote.Text = S.chgKey and ("atributo: " .. S.chgKey) or "atributo nao encontrado"
+            UI.chgNote.Text = S.chgHost
+                and ("alvo: " .. S.chgHost.Name .. (S.chgKey and ("." .. S.chgKey) or ""))
+                or "alvo nao encontrado"
         end
         if UI.abilNote then
             UI.abilNote.Text = S.abilBtn and ("botao: " .. S.abilBtn.Name) or "sem botao · usa tecla Q"
@@ -1722,10 +1837,11 @@ local function stepDraw(dt)
         S.hbMode = hbmode
         local rd = ball and ballRoot(ball)
         local aviso = S.supported and "" or " · FORA DO JOGO"
+        local run = S.runOn and (S.runJumped and " · PULO" or " · CORRENDO") or ""
         if rd then
-            UI.stLbl.Text = ("%s · %.1f st · v %.0f\nhits %d · hb %s %dx · tilt %s%s"):format(
+            UI.stLbl.Text = ("%s · %.1f st · v %.0f\nhits %d · hb %s %dx · tilt %s%s%s"):format(
                 ball.Name, (rd.Position - r.Position).Magnitude, S.vel.Magnitude, S.hits,
-                hbmode, State.hbMult, TILTS[State.tiltMode], aviso)
+                hbmode, State.hbMult, TILTS[State.tiltMode], run, aviso)
             UI.stLbl.TextColor3 = C.text
         else
             UI.stLbl.Text = ("sem bola · hb %s %dx%s\nentre em partida"):format(hbmode, State.hbMult, aviso)
@@ -1751,9 +1867,11 @@ genv.__KNX = function()
     S.tier = {}
     hbBase = {}
     killBox()
-    if math.abs(workspace.Gravity - S.gravBase) > 0.1 then workspace.Gravity = S.gravBase end
     local ch = LP.Character
     local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+    stopRun(hum)
+    pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
+    if math.abs(workspace.Gravity - S.gravBase) > 0.1 then workspace.Gravity = S.gravBase end
     if hum then
         if S.wsBase then pcall(function() hum.WalkSpeed = S.wsBase end) end
         if S.jpBase then
@@ -1794,5 +1912,5 @@ task.spawn(function()
     resolveHB()
     cacheBase()
     sweepLive()
-    out("v32 pronto · place suportado:", S.supported)
+    out("v33 pronto · place suportado:", S.supported)
 end)
