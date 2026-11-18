@@ -1,13 +1,14 @@
---[[ KENNEX HUB v45 · Volleyball Legends
+--[[ KENNEX HUB v46 · Volleyball Legends
      · abas: COMBATE / VISUAL / MOVER / ACAO / MOVIM
      · v32: esfera robusta (CanTouch fixo, raio com fallback, clamp)
-     · v36: GOLPE VIA REMOTE = RF.Serve/RF.Spike com potencia infinita
+     · v36: GOLPE VIA REMOTE = RF.Serve/RF.Spike com potencia
      · v40: charge e TSH sem carga removidos
      · v41: removidos card PODER, status do rodape, corrida automatica e hook de rede
      · v42: passe de visual — splash, chrome do painel, glow e chips no desenho
      · v43: splash refeito e boot sem travamento · barra fixa removida
      · v44: painel nasce visivel · tweens a prova de falha · vigia e cartao de erro
-     · v45: fim dos campos customizados em Instance (bug das abas) · montagem blindada
+     · v45: fim dos campos customizados em Instance · montagem blindada
+     · v46: removidos potencia infinita e forca fixa · minimizar ancorado no canto
 ]]
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -52,7 +53,7 @@ local S = {
     gravBase = workspace.Gravity, supported = false, camActive = false, camBase = nil,
     abilBtn = nil, abilT = 0, abilScanT = 0,
     tiltHold = 0, netCache = nil, netT = 0, abilFail = 0,
-    jumpT = 0, wsBase = nil, jpBase = nil, rotBase = nil, powT = 0,
+    jumpT = 0, wsBase = nil, jpBase = nil, rotBase = nil,
     rfHits = 0, rfFail = 0,
 }
 
@@ -70,8 +71,7 @@ local State = {
     sJump = 1, sTilt = 1, sServe = 1,
     autoAbility = false, abilDelay = 0.35,
     tiltMode = 1,
-    alwaysPower = true, powMult = 4,
-    remoteServe = false, remoteSpike = false, remoteInf = true, remotePow = 100,
+    remoteServe = false, remoteSpike = false, remotePow = 100,
     remoteDir = false,
 }
 local MODES = { "CLIQUE NA BOLA", "BOTAO", "MANUAL" }
@@ -317,7 +317,7 @@ local function buildLoader()
         BackgroundTransparency = 1, Text = "volleyball legends", Font = Enum.Font.Gotham,
         TextSize = 9, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left }, box)
     local tag = mk("TextLabel", { Size = UDim2.fromOffset(44, 14), Position = UDim2.fromOffset(74, 62),
-        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V45",
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V46",
         Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2 }, box)
     mk("UICorner", { CornerRadius = UDim.new(0, 5) }, tag)
     mk("UIStroke", { Color = C.accent, Thickness = 1, Transparency = 0.6 }, tag)
@@ -641,7 +641,7 @@ local function buildUI()
         BackgroundTransparency = 1, Text = "one hub · multiple plays", Font = Enum.Font.Gotham,
         TextSize = 8, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, head)
     local pill = mk("TextLabel", { Size = UDim2.fromOffset(28, 12), Position = UDim2.fromOffset(12, 31),
-        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V45",
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V46",
         Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2, ZIndex = 6 }, head)
     mk("UICorner", { CornerRadius = UDim.new(0, 4) }, pill)
     mk("UIStroke", { Color = C.accent, Thickness = 1, Transparency = 0.6 }, pill)
@@ -725,30 +725,51 @@ local function buildUI()
         setStatus("TOQUE NA BOLA", C.accent2)
     end)
 
-    local icon = mk("TextButton", { Size = UDim2.fromOffset(44, 44), AnchorPoint = Vector2.new(0.5, 0.5),
-        Position = UDim2.fromOffset(px + 22, py + 22),
+    local icon = mk("TextButton", { Size = UDim2.fromOffset(38, 38), AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromOffset(px + 19, py + 19),
         BackgroundColor3 = C.accent, BorderSizePixel = 0, Text = "K", Font = Enum.Font.GothamBlack,
-        TextSize = 18, TextColor3 = C.text, AutoButtonColor = false, Active = true,
+        TextSize = 16, TextColor3 = C.text, AutoButtonColor = false, Active = true,
         Visible = false }, gui)
     UI.icon = icon
     mk("UICorner", { CornerRadius = UDim.new(1, 0) }, icon)
     mk("UIStroke", { Color = C.accent2, Thickness = 1.4, Transparency = 0.25 }, icon)
     grad(icon, C.accent2, C.accent, 45)
 
+    local function vsNow()
+        local c = workspace.CurrentCamera
+        if c then return c.ViewportSize end
+        return Vector2.new(800, 450)
+    end
+    local function clampWin(x, y)
+        local vs = vsNow()
+        local hw, hh = win.Size.X.Offset * 0.5, win.Size.Y.Offset * 0.5
+        return UDim2.fromOffset(
+            math.clamp(x, hw + 6, math.max(hw + 6, vs.X - hw - 6)),
+            math.clamp(y, hh + 6, math.max(hh + 6, vs.Y - hh - 6)))
+    end
+
     local minimized = false
     local function setMin(v)
         minimized = v
         if v then
-            icon.Position = win.Position
+            local vs = vsNow()
+            local wx = win.Position.X.Offset - win.Size.X.Offset * 0.5
+            local wy = win.Position.Y.Offset - win.Size.Y.Offset * 0.5
+            icon.Position = UDim2.fromOffset(
+                math.clamp(wx + 24, 22, math.max(22, vs.X - 22)),
+                math.clamp(wy + 24, 22, math.max(22, vs.Y - 22)))
             icon.Visible = true
             win.Visible = false
             shadow.Visible = false
         else
-            win.Position = icon.Position
+            local vs = vsNow()
+            local ix = math.clamp(icon.Position.X.Offset, 22, math.max(22, vs.X - 22))
+            local iy = math.clamp(icon.Position.Y.Offset, 22, math.max(22, vs.Y - 22))
+            win.Position = clampWin(ix, iy)
             icon.Visible = false
             win.Visible = true
             shadow.Visible = true
-            shadow.Position = win.Position
+            shadow.Position = UDim2.fromOffset(win.Position.X.Offset + 2, win.Position.Y.Offset + 4)
         end
     end
     UI.setMin = setMin
@@ -785,9 +806,15 @@ local function buildUI()
     local function move(x, y)
         if not drag or not target then return end
         local d = Vector2.new(x, y) - st
-        target.Position = UDim2.fromOffset(off.X + d.X, off.Y + d.Y)
+        local nx, ny = off.X + d.X, off.Y + d.Y
+        if target == icon then
+            local vs = vsNow()
+            nx = math.clamp(nx, 22, math.max(22, vs.X - 22))
+            ny = math.clamp(ny, 22, math.max(22, vs.Y - 22))
+        end
+        target.Position = UDim2.fromOffset(nx, ny)
         if target == win then
-            shadow.Position = UDim2.fromOffset(off.X + d.X + 2, off.Y + d.Y + 4)
+            shadow.Position = UDim2.fromOffset(nx + 2, ny + 4)
         end
     end
     local function stop()
@@ -922,21 +949,15 @@ local function buildPages()
         local c2 = card(p, 2, "CHAMAR REMOTE")
         switch(c2, "SPIKE NO REMOTE", "remoteSpike", 1)
         switch(c2, "SAQUE NO REMOTE", "remoteServe", 2)
-        switch(c2, "POTENCIA INFINITA", "remoteInf", 3)
-        slider(c2, "POTENCIA", "remotePow", 4, 1, 300, function(v) return v .. "" end, 1)
-        switch(c2, "DIRECAO DA CAMERA", "remoteDir", 5)
-        button(c2, "LISTAR REMOTES", 6, function() safe(listRemotes) end, C.accent2)
-        UI.remNote = note(c2, "alternativa · tecla Z = saque", 7)
+        slider(c2, "POTENCIA", "remotePow", 3, 1, 300, function(v) return v .. "" end, 1)
+        switch(c2, "DIRECAO DA CAMERA", "remoteDir", 4)
+        button(c2, "LISTAR REMOTES", 5, function() safe(listRemotes) end, C.accent2)
+        UI.remNote = note(c2, "alternativa · tecla Z = saque", 6)
 
-        local c3 = card(p, 3, "FORCA FIXA")
-        switch(c3, "FORCA FIXA", "alwaysPower", 1)
-        slider(c3, "MULTIPLICADOR", "powMult", 2, 1, 200, function(v) return v .. "x" end, 1)
-        note(c3, "atributo · nao gera o roxo, so muda o numero", 3)
-
-        local c4 = card(p, 4, "LEITURA DE QUEDA")
-        slider(c4, "RAIO DE QUEDA", "reach", 1, 2, 25, function(v) return v .. "st" end)
-        slider(c4, "ALTURA SPIKE", "spikeH", 2, 2, 20, function(v) return v .. "st" end)
-        slider(c4, "RAIO SPIKE", "spikeR", 3, 2, 25, function(v) return v .. "st" end)
+        local c3 = card(p, 3, "LEITURA DE QUEDA")
+        slider(c3, "RAIO DE QUEDA", "reach", 1, 2, 25, function(v) return v .. "st" end)
+        slider(c3, "ALTURA SPIKE", "spikeH", 2, 2, 20, function(v) return v .. "st" end)
+        slider(c3, "RAIO SPIKE", "spikeR", 3, 2, 25, function(v) return v .. "st" end)
     end)
 
     block("MOVIM", function()
@@ -1088,11 +1109,6 @@ local function listRemotes()
     setStatus("remotes no console", C.accent2)
 end
 
-local function remotePower()
-    if State.remoteInf then return math.huge end
-    return State.remotePow
-end
-
 local function camFlat()
     local c = cam()
     if not c then return Vector3.zero end
@@ -1103,7 +1119,7 @@ local function camFlat()
 end
 
 local function fireRemote(which)
-    local p = remotePower()
+    local p = State.remotePow
     if which == "serve" then
         local s = remoteOf("Serve")
         if not s then return false end
@@ -1536,29 +1552,6 @@ bind(UIS.InputBegan:Connect(function(i, gp)
     end
 end))
 
---// ===================== FORCA FIXA =====================
-local POWKEYS = { "GameSpikePowerMultiplier", "GameServePowerMultiplier" }
-
-local function applyPow()
-    if not State.alwaysPower then return end
-    for _, k in ipairs(POWKEYS) do
-        safe(function() LP:SetAttribute(k, State.powMult) end)
-    end
-end
-
-for _, k in ipairs(POWKEYS) do
-    local ok, sig = pcall(function() return LP:GetAttributeChangedSignal(k) end)
-    if ok and sig then
-        bind(sig:Connect(function()
-            if not State.alwaysPower then return end
-            local cur = LP:GetAttribute(k)
-            if type(cur) == "number" and math.abs(cur - State.powMult) > 0.01 then
-                safe(function() LP:SetAttribute(k, State.powMult) end)
-            end
-        end))
-    end
-end
-
 --// ===================== HABILIDADE / TILT =====================
 local ABILWORD = { "habil", "abilit", "skill", "poder", "power", "special", "ult", "estilo" }
 
@@ -1830,7 +1823,6 @@ bind(Players.PlayerRemoving:Connect(function(pl)
 end))
 bind(LP.CharacterAdded:Connect(function()
     RFR = nil
-    task.delay(1.2, function() safe(applyPow) end)
 end))
 local function colorOf(pl)
     if pl.Team and LP.Team then
@@ -1924,11 +1916,6 @@ local function stepDraw(dt)
         safe(applyTpl)
     end
     safe(applyLive)
-
-    if State.alwaysPower and os.clock() - S.powT > 0.15 then
-        S.powT = os.clock()
-        safe(applyPow)
-    end
 
     if State.autoAbility then safe(pressAbility) end
 
@@ -2238,10 +2225,9 @@ task.spawn(function()
     safe(resolveHB)
     safe(cacheBase)
     safe(sweepLive)
-    safe(applyPow)
     load.step("aquecendo leitura", 0.93)
     task.wait(0.14)
 
     finish()
-    out("v45 pronto · place suportado:", S.supported)
+    out("v46 pronto · place suportado:", S.supported)
 end)
