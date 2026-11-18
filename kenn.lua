@@ -1,4 +1,4 @@
---[[ KENNEX HUB v40 · Volleyball Legends
+--[[ KENNEX HUB v41 · Volleyball Legends
      · abas: COMBATE / VISUAL / MOVER / ACAO / MOVIM
      · v31: cartoes com AutomaticSize + build por pagina isolado
      · v31: movimento corrigido (rot no ar, cooldown de pulo, restore de ws/jp)
@@ -18,7 +18,9 @@
      · v39: TSH SEM CARGA = forca MoveDirection parado (no charge, padrao AceHub/Zeke)
      · v39: corrida automatica agora opcional, sem auto spike nem auto pulo
      · v40: SEM CARGA nao anda mais sozinho (WalkSpeed travado + leitura de input real)
-     · v40: deteccao de movimento por teclado/thumbstick/velocidade, nao pelo MoveDirection
+     · v41: SEM CARGA movido pro Stepped (MoveDirection = input cru, sem circularidade)
+     · v41: corpo travado por velocidade horizontal zerada, nao por WalkSpeed
+     · v41: caca por nome de thumbstick removida · holdSpeed virou deriva imposta
 ]]
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -66,7 +68,6 @@ local S = {
     jumpT = 0, wsBase = nil, jpBase = nil, rotBase = nil,
     charging = false, runOn = false, runStart = 0, runEnd = 0, runJumped = false,
     runDone = 0, runWs = nil, runKey = false, ncBase = nil, ncHold = false,
-    stick = nil, stickT = 0,
     pins = {}, pinConns = {}, meterList = {}, meterT = 0, pinT = 0, powT = 0,
     rfHits = 0, rfFail = 0, wireMT = nil, wireOld = nil, lastWire = nil, lastWireT = 0,
 }
@@ -428,7 +429,7 @@ local function buildUI()
         BackgroundTransparency = 1, Text = "one hub · multiple plays", Font = Enum.Font.Gotham,
         TextSize = 8, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, head)
     local pill = mk("TextLabel", { Size = UDim2.fromOffset(28, 12), Position = UDim2.fromOffset(12, 31),
-        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V40",
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V41",
         Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2, ZIndex = 6 }, head)
     mk("UICorner", { CornerRadius = UDim.new(0, 4) }, pill)
     local dot = mk("Frame", { Size = UDim2.fromOffset(6, 6), Position = UDim2.fromOffset(45, 34),
@@ -655,12 +656,12 @@ local function buildPages()
         switch(c1, "SEM CARGA", "tshNoCharge", 1, function(on)
             if not on then S.ncBase = nil end
         end)
-        slider(c1, "VELOCIDADE PARADO", "holdSpeed", 2, 0, 24,
-            function(v) return v == 0 and "parado" or (v .. "") end, 1)
+        slider(c1, "DERIVA (ST/S)", "holdSpeed", 2, 0, 12,
+            function(v) return v == 0 and "parado" or (v .. "") end, 0.5)
         UI.ncNote = note(c1, "estado: off", 3)
         note(c1, "o jogo te trata como em corrida · a barra nao esvazia e sobe sozinha", 4)
-        note(c1, "o corpo fica parado · ande ou pule e a trava solta sozinha", 5)
-        note(c1, "0 = totalmente parado · se a barra nao subir, use 2 ou 3", 6)
+        note(c1, "corpo fica parado · ande com WASD ou no direcional e a trava solta", 5)
+        note(c1, "0 = totalmente parado · se a barra nao subir, use 1 ou 2", 6)
 
         local c2 = card(p, 2, "AUTOMACAO")
         switch(c2, "AUTO RECEPCAO", "autoRecv", 1)
@@ -1769,93 +1770,63 @@ local function pressing()
     return false
 end
 
-local STICKW = { "thumb", "joystick", "stick", "analog" }
-
-local function findStick()
-    if S.stick and S.stick.Parent then return S.stick end
-    if os.clock() - S.stickT < 2 then return S.stick end
-    S.stickT = os.clock()
-    S.stick = nil
-    local pg = LP:FindFirstChildOfClass("PlayerGui")
-    if not pg then return nil end
-    for _, d in ipairs(pg:GetDescendants()) do
-        if d:IsA("GuiObject") and d.Visible and #d:GetChildren() > 0
-            and not (UI.gui and d:IsDescendantOf(UI.gui)) then
-            local n = string.lower(d.Name)
-            for _, w in ipairs(STICKW) do
-                if string.find(n, w, 1, true) then
-                    S.stick = d
-                    return d
-                end
-            end
-        end
-    end
-    return nil
-end
-
-local function stickPushed()
-    local s = findStick()
-    if not s then return false end
-    local ap, as = s.AbsolutePosition, s.AbsoluteSize
-    local cx, cy = ap.X + as.X * 0.5, ap.Y + as.Y * 0.5
-    local lim = math.max(as.X, as.Y) * 0.12
-    for _, d in ipairs(s:GetDescendants()) do
-        if d:IsA("GuiObject") and d.Visible then
-            local dap, das = d.AbsolutePosition, d.AbsoluteSize
-            local dx = (dap.X + das.X * 0.5) - cx
-            local dy = (dap.Y + das.Y * 0.5) - cy
-            if math.sqrt(dx * dx + dy * dy) > lim then return true end
-        end
-    end
-    return false
-end
-
-local function horizSpeed()
-    local r = myRoot()
-    if not r then return 0 end
-    local v = r.AssemblyLinearVelocity
-    return Vector3.new(v.X, 0, v.Z).Magnitude
-end
-
 local function releaseNoCharge(hum)
+    if not hum then return end
+    S.ncHold = false
     if not S.ncBase then return end
     local back = State.wsOn and State.ws or S.ncBase
     if math.abs(hum.WalkSpeed - back) > 0.1 then safe(function() hum.WalkSpeed = back end) end
     S.ncBase = nil
 end
 
-local function stepNoCharge(hum)
+-- Roda em Stepped: o controlador do jogo reescreve MoveDirection a cada
+-- RenderStep, entao aqui o campo e o input cru do jogador (zero se parado).
+-- Forcar Move + zerar a velocidade horizontal = jogo acha que voce corre,
+-- corpo nao sai do lugar.
+local function stepNoCharge()
+    local ch = LP.Character
+    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
     if not hum or hum.Health <= 0 then return end
-    local want = State.tshNoCharge and not S.runOn
-    if not want then
+    local st = hum:GetState()
+    if st == Enum.HumanoidStateType.Dead or st == Enum.HumanoidStateType.Seated then
         releaseNoCharge(hum)
-        S.ncHold = false
         return
     end
 
-    -- input real do jogador: teclado, thumbstick do celular, ou velocidade (controle)
-    local manual = pressing()
-    if not manual then manual = stickPushed() end
-    if not manual and not S.stick and horizSpeed() > 3 then manual = true end
-
-    if manual then
-        -- jogador assumiu o corpo: devolve o passo e para de forcar
+    if not State.tshNoCharge or S.runOn then
         releaseNoCharge(hum)
-        S.ncHold = false
+        return
+    end
+
+    local raw = hum.MoveDirection
+    if pressing() or raw.Magnitude > 0.15 then
+        releaseNoCharge(hum)
         return
     end
 
     local dir = camFlat()
     if dir.Magnitude < 0.1 then return end
 
-    -- intencao de corrida pro jogo, mas sem deslizar o corpo
     safe(function() hum:Move(dir, false) end)
     if not S.ncBase then S.ncBase = State.wsOn and State.ws or hum.WalkSpeed end
-    if math.abs(hum.WalkSpeed - State.holdSpeed) > 0.1 then
-        safe(function() hum.WalkSpeed = State.holdSpeed end)
-    end
+    if math.abs(hum.WalkSpeed) > 0.1 then safe(function() hum.WalkSpeed = 0 end) end
     S.ncHold = true
+
+    -- no ar nao mexe: deixa a fisica do pulo intacta
+    if st == Enum.HumanoidStateType.Jumping or st == Enum.HumanoidStateType.Freefall then return end
+
+    local root = myRoot()
+    if not root then return end
+    local v = root.AssemblyLinearVelocity
+    local want = dir * State.holdSpeed
+    if math.abs(v.X - want.X) > 0.05 or math.abs(v.Z - want.Z) > 0.05 then
+        safe(function()
+            root.AssemblyLinearVelocity = Vector3.new(want.X, v.Y, want.Z)
+        end)
+    end
 end
+
+bind(RunService.Stepped:Connect(function() safe(stepNoCharge) end))
 
 local function ballExcl(b, list)
     if not b then return list end
@@ -1919,7 +1890,7 @@ bind(LP.CharacterAdded:Connect(function()
     S.chgHost = nil
     S.chgKey = nil
     S.ncBase = nil
-    S.stick = nil
+    S.ncHold = false
     RFR = nil
     if State.pinMeter then task.delay(1.5, function() if State.pinMeter then safe(buildPins) end end) end
     task.delay(1.2, function() safe(applyPow) end)
@@ -2038,9 +2009,9 @@ local function stepDraw(dt)
     if hum then
         if State.wsOn then
             if not S.wsBase then S.wsBase = hum.WalkSpeed end
-            if math.abs(hum.WalkSpeed - State.ws) > 0.1 then hum.WalkSpeed = State.ws end
+            if math.abs(hum.WalkSpeed - State.ws) > 0.1 and not S.ncHold then hum.WalkSpeed = State.ws end
         elseif S.wsBase then
-            if math.abs(hum.WalkSpeed - S.wsBase) > 0.1 then hum.WalkSpeed = S.wsBase end
+            if math.abs(hum.WalkSpeed - S.wsBase) > 0.1 and not S.ncHold then hum.WalkSpeed = S.wsBase end
             S.wsBase = nil
         end
         if State.jpOn then
@@ -2067,7 +2038,6 @@ local function stepDraw(dt)
             S.rotBase = nil
         end
     end
-    safe(function() stepNoCharge(hum) end)
 
     if State.gravOn then
         local g = S.gravBase * (State.gravPct / 100)
@@ -2253,7 +2223,7 @@ local function stepDraw(dt)
         S.uiT = os.clock()
         if UI.ncNote then
             if State.tshNoCharge then
-                UI.ncNote.Text = S.ncHold and "estado: parado carregando" or "estado: voce esta andando"
+                UI.ncNote.Text = S.ncHold and "estado: parado carregando" or "estado: livre"
                 UI.ncNote.TextColor3 = S.ncHold and C.green or C.dim
             else
                 UI.ncNote.Text = "estado: off"
@@ -2344,6 +2314,7 @@ genv.__KNX = function()
     local ch = LP.Character
     local hum = ch and ch:FindFirstChildOfClass("Humanoid")
     stopRun(hum)
+    S.ncHold = false
     if hum then
         if S.ncBase then pcall(function() hum.WalkSpeed = S.ncBase end) end
         pcall(function() hum:Move(Vector3.zero, false) end)
@@ -2392,5 +2363,5 @@ task.spawn(function()
     sweepLive()
     applyPow()
     installWire()
-    out("v40 pronto · hook:", wireHooked, "· place suportado:", S.supported)
+    out("v41 pronto · hook:", wireHooked, "· place suportado:", S.supported)
 end)
