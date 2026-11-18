@@ -1,1181 +1,2247 @@
---[[
-    KENNEX HUB v45  |  K / ROXO
-    Jogo: Volleyball Legends
-    ------------------------------------------------------------
-    Base do v39: hitbox, ESP, indicadores, mira, ataque.
-    Sem sistema de carga.
-    ------------------------------------------------------------
-    Tecla de UI: RightShift   |   Panico: End
+--[[ KENNEX HUB v40 · Volleyball Legends
+     · abas: COMBATE / VISUAL / MOVER / ACAO / MOVIM
+     · v31: cartoes com AutomaticSize + build por pagina isolado
+     · v31: movimento corrigido (rot no ar, cooldown de pulo, restore de ws/jp)
+     · hitbox = esfera cliente na bola · releaseAll por hide()
+     · v32: esfera robusta (CanTouch fixo, raio com fallback, clamp)
+     · v32: trajetoria com exclusao da bola inteira + guarda de tempo
+     · v32: bloco da bola isolado em safe (nao derruba ESP)
+     · v32: registro de bola renova timestamp · alvo forcado expira
+     · v33: SUPER SPIKE (TSH) = corre reto, pula e bate com a barra cheia
+     · v34: TRAVAR BARRA = pin por sinal de mudanca (atributo ou ValueBase)
+     · v34: escala da barra aprendida sozinha (0-1 ou 0-100)
+     · v34: W nao e mais solto se voce ja estiver segurando (sem travamento)
+     · v35: SPIKE SEMPRE CARREGADO = sobrescreve o multiplicador, ignora a barra
+     · v36: GOLPE VIA REMOTE = RF.Serve/RF.Spike com potencia infinita (padrao Sterling)
+     · v37: MULTIPLICADOR NA REDE = hook em __namecall, infla a potencia do proprio jogo
+     · v38: CORRIDA DE CARGA = comeca cedo no raio longo e segura ate o golpe
+     · v39: corrida automatica agora opcional, sem auto spike nem auto pulo
+     · v40: charge e TSH sem carga removidos
 ]]
+local Players    = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS        = game:GetService("UserInputService")
+local VIM        = game:GetService("VirtualInputManager")
+local GuiService = game:GetService("GuiService")
+local Tween      = game:GetService("TweenService")
+local RS         = game:GetService("ReplicatedStorage")
 
-if not game:IsLoaded() then game.Loaded:Wait() end
+local genv = getgenv()
+local function out(...)
+    local t = { ... }
+    for i = 1, #t do t[i] = tostring(t[i]) end
+    print("[KNX] " .. table.concat(t, " "))
+end
 
-local genv = (getgenv and getgenv()) or _G
-if type(genv.__KNX) == "function" then pcall(genv.__KNX) end
+local LP = Players.LocalPlayer
+if not LP then
+    local t = os.clock() + 8
+    repeat task.wait(0.1) LP = Players.LocalPlayer until LP or os.clock() > t
+end
+if not LP then out("sem LocalPlayer") return end
+if genv.__KNX then pcall(genv.__KNX) end
 
-local G = { conns = {}, insts = {}, alive = true }
+local PLACES = {
+    [73956553001240] = true, [74691681039273] = true, [85395484560711] = true,
+    [86789627188240] = true, [96802054849934] = true, [102580589030177] = true,
+    [103521881639626] = true, [109684591839194] = true, [117134837736236] = true,
+    [134314141048307] = true,
+}
+local GAMES = { [6931042565] = true }
 
-local Players = game:GetService("Players")
-local RS      = game:GetService("RunService")
-local UIS     = game:GetService("UserInputService")
-local VIM     = game:GetService("VirtualInputManager")
-local CoreGui = game:GetService("CoreGui")
-local TS      = game:GetService("TweenService")
-local HS      = game:GetService("HttpService")
-local LP      = Players.LocalPlayer
-local cam     = workspace.CurrentCamera
+local CFG = { cd = 0.09, lead = 0.14, pad = 0.5, scan = 0.3,
+    maxModelMag = 30, maxModelParts = 60, maxCand = 40, radCap = 6,
+    maxHBmag = 12, maxOut = 24, minHBmag = 0.1, eps = 0.02, jumpCd = 0.4 }
 
--- ============================================================
--- ESTADO
--- ============================================================
 local S = {
-    autoSpike = false, spikeDist = 18,
-    autoBump  = false, bumpDist  = 10,
-
-    hitbox = false, hitboxSize = 2.2, hitMode = "HOOK", hitShow = true,
-
-    aim = false, aimLock = true, aimFov = 140, aimSmooth = 0.35,
-
-    superSpike = false, ssPower = 60, ssTime = 0.15,
-
-    esp = false, espBox = true, espFill = true, espHp = true,
-    espName = true, espDist = true, espBall = true,
-
-    hud = true,
-
-    remoteServe = false, remoteSpike = false, remoteInf = false,
-
-    autoAbility = false, abilityDelay = 1.4, abilityKey = Enum.KeyCode.Q,
-    tilt = false, tiltAngle = 12,
-
-    walkspeed = 32, jumppower = 55, autorot = false,
-
-    uiKey = Enum.KeyCode.RightShift, panicKey = Enum.KeyCode.End,
-    open = true, mini = false,
-
-    lastSpike = nil, lastServe = nil, lastInf = nil,
-    lastAtk = 0, fps = 60,
+    alive = true, ball = nil, box = nil, prev = nil, vel = Vector3.zero,
+    balls = {}, tier = {}, baseRad = {}, charRad = 2, charT = 0, live = {},
+    hits = 0, lastPress = 0, pick = false, manual = nil, btn = nil, btnT = 0,
+    uiT = 0, scanT = 0, hbT = 0, forced = nil, conns = {}, hbMode = "off",
+    gravBase = workspace.Gravity, supported = false, camActive = false, camBase = nil,
+    abilBtn = nil, abilT = 0, abilScanT = 0,
+    tiltHold = 0, netCache = nil, netT = 0, abilFail = 0,
+    jumpT = 0, wsBase = nil, jpBase = nil, rotBase = nil,
+    runOn = false, runStart = 0, runEnd = 0, runJumped = false,
+    runDone = 0, runWs = nil, runKey = false,
+    pins = {}, pinConns = {}, meterList = {}, meterT = 0, pinT = 0, powT = 0,
+    rfHits = 0, rfFail = 0, wireMT = nil, wireOld = nil, lastWire = nil, lastWireT = 0,
 }
 
--- paleta
-local ACC   = Color3.fromRGB(167, 139, 250)
-local ACC2  = Color3.fromRGB(124, 82, 240)
-local GOOD  = Color3.fromRGB(120, 225, 165)
-local WARN  = Color3.fromRGB(255, 178, 84)
-local BG    = Color3.fromRGB(11, 9, 18)
-local PANEL = Color3.fromRGB(22, 18, 33)
-local ROW   = Color3.fromRGB(31, 26, 45)
-local TXT   = Color3.fromRGB(235, 231, 245)
-local DIM   = Color3.fromRGB(139, 130, 160)
+local function bind(c) S.conns[#S.conns + 1] = c; return c end
 
--- ============================================================
--- UTIL
--- ============================================================
-local function new(class, props, parent)
-    local o = Instance.new(class)
-    for k, v in pairs(props) do o[k] = v end
-    if parent then o.Parent = parent end
-    table.insert(G.insts, o)
+local State = {
+    hbOn = true, hbMult = 3, hbClient = true, hbReal = true, hbQuery = true,
+    ring = true, tracer = true, traj = true, esp = true, hp = true, hideMate = false,
+    useDraw = false,
+    aim = true, fovRing = true, aimFov = 55, aimSpeed = 9, aimRange = 90, camFov = 0,
+    autoRecv = false, autoSpike = false, jump = false, autoRot = false,
+    reach = 9, spikeH = 6, spikeR = 8, hold = 0.03, mode = 1,
+    gravOn = false, gravPct = 100, wsOn = false, ws = 16, jpOn = false, jp = 50,
+    sSpike = 1, sBump = 1, sSet = 1, sBlock = 1, sDive = 1, sSpeed = 1,
+    sJump = 1, sTilt = 1, sServe = 1,
+    autoAbility = false, abilDelay = 0.35,
+    tiltMode = 1,
+    superSpike = false, runTime = 1, runSpeed = 30, runDist = 35,
+    pinMeter = false, pinPct = 100,
+    alwaysPower = true, powMult = 4,
+    remoteServe = false, remoteSpike = false, remoteInf = true, remotePow = 100,
+    remoteDir = false,
+    wireMult = true, wirePow = 2, logCalls = false,
+}
+local MODES = { "CLIQUE NA BOLA", "BOTAO", "MANUAL" }
+local TILTS = { "OFF", "RETA", "DIAGONAL", "INVERTIDO", "REDE" }
+
+local C = {
+    bg = Color3.fromRGB(10, 7, 18), surface = Color3.fromRGB(19, 13, 30),
+    card = Color3.fromRGB(23, 16, 36), inset = Color3.fromRGB(14, 10, 22),
+    line = Color3.fromRGB(46, 32, 70), accent = Color3.fromRGB(139, 92, 246),
+    accent2 = Color3.fromRGB(196, 162, 255), text = Color3.fromRGB(243, 240, 252),
+    dim = Color3.fromRGB(130, 122, 152), green = Color3.fromRGB(74, 222, 128),
+    red = Color3.fromRGB(248, 113, 113), amber = Color3.fromRGB(251, 191, 36),
+}
+local D3 = {
+    ring = Color3.fromRGB(0, 235, 255), tracer = Color3.fromRGB(178, 122, 255),
+    land = Color3.fromRGB(251, 191, 36), traj = Color3.fromRGB(251, 191, 36),
+    enemy = Color3.fromRGB(248, 113, 113), mate = Color3.fromRGB(96, 165, 250),
+    solo = Color3.fromRGB(74, 222, 128), fov = Color3.fromRGB(139, 92, 246),
+}
+
+local DRAW = nil
+pcall(function() local t = Drawing.new("Circle"); t:Remove(); DRAW = Drawing end)
+
+local gpar
+if type(gethui) == "function" then local ok, h = pcall(gethui); if ok and h then gpar = h end end
+if not gpar then
+    local ok, cg = pcall(function() return game:GetService("CoreGui") end)
+    if ok and cg then
+        local ok2 = pcall(function() local f = Instance.new("Frame"); f.Parent = cg; f:Destroy() end)
+        if ok2 then gpar = cg end
+    end
+end
+if not gpar then gpar = LP:WaitForChild("PlayerGui") end
+
+local function mk(cls, props, par)
+    local o = Instance.new(cls)
+    local p = par
+    if props then
+        for k, v in pairs(props) do
+            if k == "Parent" then p = v else pcall(function() o[k] = v end) end
+        end
+    end
+    if p then o.Parent = p end
     return o
 end
+local function safe(f) local ok, e = pcall(f); if not ok then out("ERRO", e) end return ok end
 
-local function conn(sig, fn)
-    local c = sig:Connect(fn)
-    table.insert(G.conns, c)
+local UI = {}
+
+--// ===================== DESENHO =====================
+local pool = { ring = {}, dot = {}, tracer = {}, land = {}, traj = {} }
+
+local function makeCircle(col, thick, trans, filled)
+    if DRAW and State.useDraw then
+        local c = DRAW.new("Circle")
+        c.Color = col; c.Thickness = thick or 1.5; c.NumSides = 72
+        c.Filled = filled or false; c.Transparency = trans or 0.1; c.Visible = false
+        return { set = function(x, y, r, cc, v)
+            c.Position = Vector2.new(x, y); c.Radius = r
+            if cc then c.Color = cc end; c.Visible = v end,
+            hide = function() c.Visible = false end,
+            rm = function() pcall(function() c:Remove() end) end }
+    end
+    local f = mk("Frame", { BackgroundTransparency = filled and 0.15 or 1,
+        BackgroundColor3 = col, BorderSizePixel = 0, Visible = false }, UI.gui)
+    mk("UICorner", { CornerRadius = UDim.new(1, 0) }, f)
+    local st
+    if not filled then st = mk("UIStroke", { Color = col, Thickness = thick or 1.5 }, f) end
+    return { set = function(x, y, r, cc, v)
+        f.Size = UDim2.fromOffset(r * 2, r * 2); f.Position = UDim2.fromOffset(x - r, y - r)
+        if cc then
+            if st then st.Color = cc else f.BackgroundColor3 = cc end
+        end
+        f.Visible = v end,
+        hide = function() f.Visible = false end,
+        rm = function() pcall(function() f:Destroy() end) end }
+end
+
+local function makeLine(col)
+    if DRAW and State.useDraw then
+        local l = DRAW.new("Line")
+        l.Color = col; l.Thickness = 1.3; l.Transparency = 0.35; l.Visible = false
+        return { set = function(a, b, cc, v)
+            l.From = a; l.To = b; if cc then l.Color = cc end; l.Visible = v end,
+            hide = function() l.Visible = false end,
+            rm = function() pcall(function() l:Remove() end) end }
+    end
+    local f = mk("Frame", { BackgroundColor3 = col, BorderSizePixel = 0,
+        BackgroundTransparency = 0.35, Visible = false }, UI.gui)
+    return { set = function(a, b, cc, v)
+        local dv = b - a
+        f.Position = UDim2.fromOffset(a.X, a.Y); f.Size = UDim2.fromOffset(dv.Magnitude, 1)
+        f.Rotation = math.deg(math.atan2(dv.Y, dv.X))
+        if cc then f.BackgroundColor3 = cc end; f.Visible = v end,
+        hide = function() f.Visible = false end,
+        rm = function() pcall(function() f:Destroy() end) end }
+end
+
+local function makeText(col, sz)
+    if DRAW and State.useDraw then
+        local t = DRAW.new("Text")
+        t.Color = col; t.Size = sz or 10; t.Center = true; t.Outline = true
+        t.OutlineColor = Color3.new(0, 0, 0); t.Visible = false
+        return { set = function(x, y, s, cc, v)
+            t.Position = Vector2.new(x, y); t.Text = tostring(s)
+            if cc then t.Color = cc end; t.Visible = v end,
+            hide = function() t.Visible = false end,
+            rm = function() pcall(function() t:Remove() end) end }
+    end
+    local l = mk("TextLabel", { Size = UDim2.fromOffset(170, 14), BackgroundTransparency = 1,
+        Font = Enum.Font.GothamBold, TextSize = sz or 10, TextColor3 = col,
+        TextStrokeTransparency = 0.3, Visible = false }, UI.gui)
+    return { set = function(x, y, s, cc, v)
+        l.Position = UDim2.fromOffset(x - 85, y); l.Text = tostring(s)
+        if cc then l.TextColor3 = cc end; l.Visible = v end,
+        hide = function() l.Visible = false end,
+        rm = function() pcall(function() l:Destroy() end) end }
+end
+
+local function grab(list, maker, arg)
+    for _, o in ipairs(list) do if not o.busy then o.busy = true return o end end
+    local o = maker(arg); o.busy = true; list[#list + 1] = o; return o
+end
+local function releaseAll(list)
+    for _, o in ipairs(list) do
+        if o.busy then o.busy = false; pcall(o.hide) end
+    end
+end
+
+--// ===================== DASHBOARD =====================
+local pages, pillOf = {}, {}
+local activeTab = 0
+local cardH, cardPg = {}, {}
+
+local function setStatus(txt, col)
+    if not UI.stLbl then return end
+    UI.stLbl.Text = txt
+    if col then UI.stLbl.TextColor3 = col end
+end
+
+local function showTab(i)
+    if activeTab == i then return end
+    activeTab = i
+    for k, p in pairs(pages) do p.page.Visible = (k == i) end
+    for k, b in pairs(pillOf) do
+        local on = k == i
+        Tween:Create(b, TweenInfo.new(0.12),
+            { BackgroundColor3 = on and C.accent or C.card }):Play()
+        b.TextColor3 = on and C.text or C.dim
+    end
+end
+
+local function bump() end
+local function addRow() end
+
+local function card(pg, order, label)
+    local c = mk("Frame", { Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = C.card,
+        BorderSizePixel = 0, LayoutOrder = order }, pg.list)
+    mk("UICorner", { CornerRadius = UDim.new(0, 12) }, c)
+    mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.35 }, c)
+    mk("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, c)
+    mk("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
+        PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, c)
+    if label then
+        mk("TextLabel", { Size = UDim2.new(1, 0, 0, 15), BackgroundTransparency = 1,
+            Text = "  " .. label, Font = Enum.Font.GothamBold, TextSize = 8,
+            TextColor3 = C.accent2, TextXAlignment = Enum.TextXAlignment.Left,
+            LayoutOrder = 0 }, c)
+    end
     return c
 end
 
-local function corner(o, r)
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, r or 6)
-    c.Parent = o
-    return c
+local function switch(c, label, key, order, cb)
+    local row = mk("TextButton", { Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = C.surface,
+        BorderSizePixel = 0, Text = "", AutoButtonColor = false, LayoutOrder = order }, c)
+    mk("UICorner", { CornerRadius = UDim.new(0, 9) }, row)
+    mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.55 }, row)
+    mk("TextLabel", { Size = UDim2.new(1, -54, 1, 0), Position = UDim2.fromOffset(10, 0),
+        BackgroundTransparency = 1, Text = label, Font = Enum.Font.GothamMedium,
+        TextSize = 10, TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left }, row)
+    local track = mk("Frame", { Size = UDim2.fromOffset(34, 17), Position = UDim2.new(1, -44, 0.5, -8),
+        BackgroundColor3 = C.inset, BorderSizePixel = 0 }, row)
+    mk("UICorner", { CornerRadius = UDim.new(1, 0) }, track)
+    local knob = mk("Frame", { Size = UDim2.fromOffset(13, 13), Position = UDim2.fromOffset(2, 2),
+        BackgroundColor3 = C.dim, BorderSizePixel = 0 }, track)
+    mk("UICorner", { CornerRadius = UDim.new(1, 0) }, knob)
+    local function paint()
+        local on = State[key]
+        Tween:Create(track, TweenInfo.new(0.13), { BackgroundColor3 = on and C.accent or C.inset }):Play()
+        Tween:Create(knob, TweenInfo.new(0.13),
+            { Position = on and UDim2.fromOffset(19, 2) or UDim2.fromOffset(2, 2),
+              BackgroundColor3 = on and C.text or C.dim }):Play()
+    end
+    row.Activated:Connect(function()
+        State[key] = not State[key]
+        paint()
+        if cb then safe(function() cb(State[key]) end) end
+    end)
+    paint()
 end
 
-local function stroke(o, col, th)
-    local s = Instance.new("UIStroke")
-    s.Color = col or Color3.fromRGB(56, 46, 78)
-    s.Thickness = th or 1
-    s.Parent = o
+local function slider(c, label, key, order, min, max, fmt, step, cb)
+    local row = mk("Frame", { Size = UDim2.new(1, 0, 0, 37), BackgroundColor3 = C.surface,
+        BorderSizePixel = 0, LayoutOrder = order }, c)
+    mk("UICorner", { CornerRadius = UDim.new(0, 9) }, row)
+    mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.55 }, row)
+    mk("TextLabel", { Size = UDim2.new(1, -58, 0, 14), Position = UDim2.fromOffset(10, 4),
+        BackgroundTransparency = 1, Text = label, Font = Enum.Font.GothamMedium,
+        TextSize = 10, TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left }, row)
+    local val = mk("TextLabel", { Size = UDim2.fromOffset(44, 13), Position = UDim2.new(1, -52, 0, 4),
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = tostring(State[key]),
+        Font = Enum.Font.Code, TextSize = 9, TextColor3 = C.accent2 }, row)
+    mk("UICorner", { CornerRadius = UDim.new(0, 5) }, val)
+    local track = mk("Frame", { Size = UDim2.new(1, -20, 0, 5), Position = UDim2.fromOffset(10, 25),
+        BackgroundColor3 = C.inset, BorderSizePixel = 0 }, row)
+    mk("UICorner", { CornerRadius = UDim.new(1, 0) }, track)
+    local fill = mk("Frame", { Size = UDim2.fromScale(0.3, 1), BackgroundColor3 = C.accent,
+        BorderSizePixel = 0 }, track)
+    mk("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
+    local grip = mk("Frame", { Size = UDim2.fromOffset(10, 10), AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.3, 0, 0.5, 0), BackgroundColor3 = C.text, BorderSizePixel = 0 }, track)
+    mk("UICorner", { CornerRadius = UDim.new(1, 0) }, grip)
+    local hit = mk("TextButton", { Size = UDim2.new(1, -20, 0, 16), Position = UDim2.fromOffset(10, 19),
+        BackgroundTransparency = 1, Text = "", AutoButtonColor = false }, row)
+
+    local function setVal(v)
+        v = math.clamp(v, min, max)
+        if step then v = math.floor(v / step + 0.5) * step end
+        v = math.floor(v * 100 + 0.5) / 100
+        State[key] = v
+        local a = (max > min) and ((v - min) / (max - min)) or 0
+        fill.Size = UDim2.fromScale(a, 1)
+        grip.Position = UDim2.new(a, 0, 0.5, 0)
+        val.Text = fmt and fmt(v) or tostring(v)
+        if cb then safe(function() cb(v) end) end
+    end
+    setVal(State[key])
+
+    local function fromX(x)
+        local ap, as = track.AbsolutePosition, track.AbsoluteSize
+        if as.X <= 0 then return end
+        setVal(min + (max - min) * math.clamp((x - ap.X) / as.X, 0, 1))
+    end
+    hit.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
+            fromX(i.Position.X)
+        end
+    end)
+    hit.InputChanged:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.Touch
+            or i.UserInputType == Enum.UserInputType.MouseMovement then fromX(i.Position.X) end
+    end)
+end
+
+local function button(c, txt, order, cb, col)
+    local b = mk("TextButton", { Size = UDim2.new(1, 0, 0, 28), BackgroundColor3 = C.surface,
+        BorderSizePixel = 0, Text = txt, Font = Enum.Font.GothamBold, TextSize = 9,
+        TextColor3 = col or C.text, AutoButtonColor = false, LayoutOrder = order }, c)
+    mk("UICorner", { CornerRadius = UDim.new(0, 9) }, b)
+    mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.55 }, b)
+    b.Activated:Connect(function() safe(cb) end)
+    return b
+end
+
+local function note(c, txt, order, col)
+    local l = mk("TextLabel", { Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1,
+        Text = txt, Font = Enum.Font.Gotham, TextSize = 8, TextColor3 = col or C.dim,
+        TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+        LayoutOrder = order }, c)
+    return l
+end
+
+local function makePage(i)
+    local page = mk("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+        Visible = false }, UI.content)
+    local scroll = mk("ScrollingFrame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+        BorderSizePixel = 0, ScrollBarThickness = 2, ScrollBarImageColor3 = C.accent,
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        ScrollingDirection = Enum.ScrollingDirection.Y }, page)
+    local list = mk("Frame", { Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, scroll)
+    mk("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, list)
+    mk("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8) }, list)
+    pages[i] = { page = page, scroll = scroll, list = list, h = 16 }
+end
+
+local ballRoot, pressPoint, press, restoreAll, rebuildDraw, servePath, stopRun
+
+local function buildUI()
+    local vs = Vector2.new(800, 450)
+    local c0 = workspace.CurrentCamera
+    if c0 then vs = c0.ViewportSize end
+
+    local W = math.clamp(math.floor(vs.X * 0.66), 250, 310)
+    local H = math.clamp(math.floor(vs.Y * 0.68), 280, 420)
+    local px = 12
+    local py = math.max(10, math.floor(vs.Y * 0.10))
+
+    local gui = mk("ScreenGui", { Name = "KennexHub", ResetOnSpawn = false,
+        IgnoreGuiInset = true, DisplayOrder = 9999 }, gpar)
+    UI.gui = gui
+
+    local win = mk("Frame", { Size = UDim2.fromOffset(W, H), Position = UDim2.fromOffset(px, py),
+        BackgroundColor3 = C.bg, BorderSizePixel = 0, Active = true, ClipsDescendants = true }, gui)
+    UI.win = win
+    mk("UICorner", { CornerRadius = UDim.new(0, 16) }, win)
+    mk("UIStroke", { Color = C.accent, Thickness = 1, Transparency = 0.45 }, win)
+
+    local head = mk("Frame", { Size = UDim2.new(1, 0, 0, 46), BackgroundColor3 = C.surface,
+        BorderSizePixel = 0, ZIndex = 3, Active = true }, win)
+    UI.head = head
+    mk("UICorner", { CornerRadius = UDim.new(0, 16) }, head)
+    mk("Frame", { Size = UDim2.new(1, 0, 0, 14), Position = UDim2.new(0, 0, 1, -14),
+        BackgroundColor3 = C.surface, BorderSizePixel = 0 }, head)
+    mk("UIGradient", { Color = ColorSequence.new(C.accent2, C.accent), Rotation = 90,
+        Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.78),
+            NumberSequenceKeypoint.new(1, 1) }) }, head)
+    mk("Frame", { Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1),
+        BackgroundColor3 = C.accent, BorderSizePixel = 0, BackgroundTransparency = 0.3 }, head)
+
+    local logo = mk("TextLabel", { Size = UDim2.fromOffset(24, 24), Position = UDim2.fromOffset(12, 11),
+        BackgroundColor3 = C.accent, BorderSizePixel = 0, Text = "K",
+        Font = Enum.Font.GothamBlack, TextSize = 14, TextColor3 = C.text, ZIndex = 6 }, head)
+    mk("UICorner", { CornerRadius = UDim.new(0, 7) }, logo)
+    mk("UIGradient", { Color = ColorSequence.new(C.accent2, C.accent), Rotation = 45 }, logo)
+
+    local title = mk("TextLabel", { Size = UDim2.fromOffset(140, 16), Position = UDim2.fromOffset(42, 8),
+        BackgroundTransparency = 1, Text = "KENNEX", Font = Enum.Font.GothamBlack,
+        TextSize = 15, TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, head)
+    mk("UIGradient", { Color = ColorSequence.new(C.accent2, C.accent), Rotation = 25 }, title)
+    mk("TextLabel", { Size = UDim2.fromOffset(160, 10), Position = UDim2.fromOffset(42, 24),
+        BackgroundTransparency = 1, Text = "one hub · multiple plays", Font = Enum.Font.Gotham,
+        TextSize = 8, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, head)
+    local pill = mk("TextLabel", { Size = UDim2.fromOffset(28, 12), Position = UDim2.fromOffset(12, 31),
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V40",
+        Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2, ZIndex = 6 }, head)
+    mk("UICorner", { CornerRadius = UDim.new(0, 4) }, pill)
+    local dot = mk("Frame", { Size = UDim2.fromOffset(6, 6), Position = UDim2.fromOffset(45, 34),
+        BackgroundColor3 = C.red, BorderSizePixel = 0, ZIndex = 6 }, head)
+mk("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
+    UI.dot = dot
+
+    local dragBar = mk("TextButton", { Size = UDim2.new(1, -74, 0, 46), BackgroundTransparency = 1,
+        Text = "", AutoButtonColor = false, Active = true, ZIndex = 4 }, head)
+    UI.dragBar = dragBar
+
+    local function headBtn(txt, xoff, col, size)
+        local b = mk("TextButton", { Size = UDim2.fromOffset(26, 26), Position = UDim2.new(1, xoff, 0, 10),
+            BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = txt, Font = Enum.Font.GothamBold,
+            TextSize = size or 14, TextColor3 = col or C.dim, AutoButtonColor = false, ZIndex = 7 }, head)
+        mk("UICorner", { CornerRadius = UDim.new(0, 8) }, b)
+        mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.4 }, b)
+        return b
+    end
+    local offBtn = headBtn("OFF", -92, C.red, 8)
+    local minBtn = headBtn("×", -60, C.text, 16)
+
+    local TABS = { "COMBATE", "VISUAL", "MOVER", "ACAO", "MOVIM" }
+    local tabRow = mk("Frame", { Size = UDim2.new(1, -20, 0, 26), Position = UDim2.fromOffset(10, 52),
+        BackgroundTransparency = 1, ZIndex = 2 }, win)
+    mk("UIListLayout", { Padding = UDim.new(0, 4), FillDirection = Enum.FillDirection.Horizontal,
+        SortOrder = Enum.SortOrder.LayoutOrder, VerticalAlignment = Enum.VerticalAlignment.Center }, tabRow)
+
+    local content = mk("Frame", { Size = UDim2.new(1, -20, 1, -134), Position = UDim2.fromOffset(10, 82),
+        BackgroundTransparency = 1, ClipsDescendants = true }, win)
+    UI.content = content
+
+    local foot = mk("Frame", { Size = UDim2.new(1, -20, 0, 40), Position = UDim2.new(0, 10, 1, -50),
+        BackgroundColor3 = C.inset, BorderSizePixel = 0 }, win)
+    mk("UICorner", { CornerRadius = UDim.new(0, 10) }, foot)
+    mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.5 }, foot)
+    local stLbl = mk("TextLabel", { Size = UDim2.new(1, -104, 1, -8), Position = UDim2.fromOffset(7, 4),
+        BackgroundTransparency = 1, Text = "procurando bola", Font = Enum.Font.Code, TextSize = 8,
+        TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true }, foot)
+    UI.stLbl = stLbl
+
+    local function footBtn(txt, xoff, w, col, cb)
+        local b = mk("TextButton", { Size = UDim2.fromOffset(w, 24), Position = UDim2.new(1, xoff, 0.5, -12),
+            BackgroundColor3 = C.surface, BorderSizePixel = 0, Text = txt,
+            Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = col or C.dim,
+            AutoButtonColor = false }, foot)
+        mk("UICorner", { CornerRadius = UDim.new(0, 7) }, b)
+        mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.5 }, b)
+        b.Activated:Connect(function() safe(cb) end)
+        return b
+    end
+    local modeBtn = footBtn("MODO 1", -94, 46, C.text, function()
+        State.mode = (State.mode % #MODES) + 1
+        modeBtn.Text = "MODO " .. State.mode
+        setStatus("modo: " .. MODES[State.mode])
+    end)
+    footBtn("BOLA", -44, 38, C.accent2, function()
+        S.pick = true
+        setStatus("TOQUE NA BOLA", C.accent2)
+    end)
+
+    local icon = mk("TextButton", { Size = UDim2.fromOffset(44, 44), Position = UDim2.fromOffset(px, py),
+        BackgroundColor3 = C.accent, BorderSizePixel = 0, Text = "K", Font = Enum.Font.GothamBlack,
+        TextSize = 18, TextColor3 = C.text, AutoButtonColor = false, Active = true,
+        Visible = false }, gui)
+    UI.icon = icon
+    mk("UICorner", { CornerRadius = UDim.new(1, 0) }, icon)
+    mk("UIStroke", { Color = C.accent2, Thickness = 1, Transparency = 0.3 }, icon)
+    mk("UIGradient", { Color = ColorSequence.new(C.accent2, C.accent), Rotation = 45 }, icon)
+
+    local minimized = false
+    local function setMin(v)
+        minimized = v
+        if v then
+            icon.Position = win.Position
+            icon.Visible = true
+            win.Visible = false
+        else
+            win.Position = icon.Position
+            icon.Visible = false
+            win.Visible = true
+        end
+    end
+    UI.setMin = setMin
+    minBtn.Activated:Connect(function() setMin(true) end)
+    icon.Activated:Connect(function() if minimized then setMin(false) end end)
+    offBtn.Activated:Connect(function() if genv.__KNX then genv.__KNX() end end)
+
+    for i, name in ipairs(TABS) do
+        local b = mk("TextButton", { Size = UDim2.new(0.2, -4, 1, 0), BackgroundColor3 = C.card,
+            BorderSizePixel = 0, Text = name, Font = Enum.Font.GothamBold, TextSize = 8,
+            TextColor3 = C.dim, AutoButtonColor = false, LayoutOrder = i }, tabRow)
+        mk("UICorner", { CornerRadius = UDim.new(1, 0) }, b)
+        mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.5 }, b)
+        b.Activated:Connect(function() showTab(i) end)
+        pillOf[i] = b
+        makePage(i)
+    end
+
+    local drag, st, off, target = false, nil, nil, nil
+    local function start(obj, x, y)
+        drag = true
+        target = obj
+        st = Vector2.new(x, y)
+        off = Vector2.new(obj.Position.X.Offset, obj.Position.Y.Offset)
+    end
+    local function move(x, y)
+        if not drag or not target then return end
+        local d = Vector2.new(x, y) - st
+        target.Position = UDim2.fromOffset(off.X + d.X, off.Y + d.Y)
+    end
+    local function stop()
+        drag = false
+        if minimized and icon then win.Position = icon.Position end
+    end
+    local function hook(obj, getter)
+        obj.InputBegan:Connect(function(i)
+            if i.UserInputType ~= Enum.UserInputType.Touch
+                and i.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+            start(getter(), i.Position.X, i.Position.Y)
+        end)
+        obj.InputChanged:Connect(function(i)
+            if i.UserInputType == Enum.UserInputType.Touch
+                or i.UserInputType == Enum.UserInputType.MouseMovement then move(i.Position.X, i.Position.Y) end
+        end)
+        obj.InputEnded:Connect(stop)
+    end
+    hook(dragBar, function() return win end)
+    hook(icon, function() return icon end)
+
+    return true
+end
+
+--// ===================== CONTEUDO =====================
+local function buildPages()
+    local function pg(i) return pages[i] end
+
+    local function block(name, fn)
+        local ok, e = pcall(fn)
+        if not ok then
+            out("FALHA CARD", name, tostring(e))
+            local p = pages[1]
+            if p then
+                local c = card(p, 90, name)
+                note(c, "erro: " .. tostring(e), 1, C.red)
+            end
+        end
+    end
+
+    block("COMBATE", function()
+        local p = pg(1)
+        local c1 = card(p, 1, "HITBOX")
+        switch(c1, "HITBOX LIGADA", "hbOn", 1, function(on)
+            if not on and restoreAll then restoreAll() end
+        end)
+        slider(c1, "MULTIPLICADOR", "hbMult", 2, 1, 12, function(v) return v .. "x" end, 0.1)
+        switch(c1, "ESFERA NA BOLA", "hbClient", 3)
+        switch(c1, "REFORCO SERVIDOR", "hbReal", 4)
+        switch(c1, "CANQUERY", "hbQuery", 5)
+        note(c1, "esfera = volume na bola · reforco = template do servidor", 6)
+
+        local c2 = card(p, 2, "MIRA")
+        switch(c2, "MIRA", "aim", 1)
+        switch(c2, "ANEL FOV", "fovRing", 2)
+        slider(c2, "CONE FOV", "aimFov", 3, 5, 180, function(v) return v .. "°" end, 1)
+        slider(c2, "SUAVIZACAO", "aimSpeed", 4, 1, 30, function(v) return v .. "" end, 0.5)
+        slider(c2, "ALCANCE", "aimRange", 5, 10, 300, function(v) return v .. "st" end, 1)
+        slider(c2, "CAMERA FOV", "camFov", 6, 0, 120, function(v) return v == 0 and "off" or (v .. "°") end, 1)
+
+        local c3 = card(p, 3, "PODER")
+        local function attr(key, label, maxv, stepv, order, cr)
+            slider(cr, label, key, order, 0, maxv, function(v) return v .. "x" end, stepv,
+                function(v) safe(function() LP:SetAttribute(key, v) end) end)
+        end
+        attr("GameSpikePowerMultiplier", "FORCA SPIKE", 200, 1, 1, c3)
+        attr("GameServePowerMultiplier", "FORCA SAQUE", 200, 1, 2, c3)
+        attr("GameBumpPowerMultiplier", "FORCA BUMP", 200, 1, 3, c3)
+        attr("GameSetPowerMultiplier", "FORCA SET", 200, 1, 4, c3)
+        attr("GameBlockPowerMultiplier", "FORCA BLOQUEIO", 200, 1, 5, c3)
+        attr("GameTiltPowerMultiplier", "FORCA TILT", 200, 1, 6, c3)
+        attr("GameSpeedMultiplier", "VELOCIDADE", 1.5, 0.05, 7, c3)
+        attr("GameJumpPowerMultiplier", "FORCA PULO", 5, 0.1, 8, c3)
+        attr("GameDiveSpeedMultiplier", "VELOCIDADE DIVE", 5, 0.1, 9, c3)
+        note(c3, "atributo puro · so vale se o jogo ler no cliente", 10)
+    end)
+
+    block("VISUAL", function()
+        local p = pg(2)
+        local c1 = card(p, 1, "LEITURA DA BOLA")
+        switch(c1, "ANEL", "ring", 1)
+        switch(c1, "TRACER", "tracer", 2)
+        switch(c1, "TRAJETORIA", "traj", 3)
+        local c2 = card(p, 2, "JOGADORES")
+        switch(c2, "ESP", "esp", 1)
+        switch(c2, "VIDA NO ESP", "hp", 2)
+        switch(c2, "ESCONDER ALIADO", "hideMate", 3)
+        local c3 = card(p, 3, "RENDER")
+        switch(c3, "USAR DRAWING", "useDraw", 1, function() if rebuildDraw then rebuildDraw() end end)
+        note(c3, "drawing costuma ser mais leve que frame", 2)
+    end)
+
+    block("MOVER", function()
+        local p = pg(3)
+        local c1 = card(p, 1, "AEREOS")
+        switch(c1, "GIRAR NO AR", "autoRot", 1)
+        switch(c1, "AUTO PULO", "jump", 2)
+        note(c1, "girar no ar forca o corpo a acompanhar a camera durante o salto", 3)
+        local c2 = card(p, 2, "GRAVIDADE")
+        switch(c2, "GRAVIDADE", "gravOn", 1)
+        slider(c2, "GRAVIDADE %", "gravPct", 2, 1, 100, function(v) return v .. "%" end, 1)
+        note(c2, "afeta a bola tambem, nao so voce", 3)
+        local c3 = card(p, 3, "CORPO")
+        switch(c3, "WALKSPEED", "wsOn", 1)
+        slider(c3, "WALKSPEED", "ws", 2, 1, 100, function(v) return v .. "" end, 1)
+        switch(c3, "JUMPPOWER", "jpOn", 3)
+        slider(c3, "JUMPPOWER", "jp", 4, 1, 200, function(v) return v .. "" end, 1)
+        note(c3, "desligar devolve o valor original do jogo", 5)
+    end)
+
+    block("ACAO", function()
+        local p = pg(4)
+        local c2 = card(p, 2, "AUTOMACAO")
+        switch(c2, "AUTO RECEPCAO", "autoRecv", 1)
+        switch(c2, "AUTO SPIKE", "autoSpike", 2)
+        switch(c2, "AUTO PULO", "jump", 3)
+
+        local c3 = card(p, 3, "CORRIDA AUTOMATICA")
+        switch(c3, "CORRIDA", "superSpike", 1, function(on)
+            if not on then safe(function() stopRun(nil) end) end
+        end)
+        slider(c3, "DISTANCIA DE ARRANQUE", "runDist", 2, 10, 70, function(v) return v .. "st" end, 1)
+        slider(c3, "TEMPO DE CORRIDA", "runTime", 3, 0.2, 2.5,
+            function(v) return ("%.2fs"):format(v) end, 0.05)
+        slider(c3, "VELOCIDADE NA CORRIDA", "runSpeed", 4, 10, 45,
+            function(v) return v .. "" end, 1)
+        UI.runNote = note(c3, "opcional · corre, pula e bate sozinho", 5)
+
+        local c4 = card(p, 4, "MULTIPLICADOR NA REDE")
+        switch(c4, "INFLAR POTENCIA", "wireMult", 1)
+        slider(c4, "MULTIPLICADOR", "wirePow", 2, 1, 15, function(v) return v .. "x" end, 0.5)
+        button(c4, "LISTAR REMOTES", 3, function() safe(listRemotes) end, C.accent2)
+        switch(c4, "LOGAR CHAMADAS", "logCalls", 4)
+        UI.rfNote = note(c4, "hook no __namecall · reforca a potencia enviada", 5)
+
+        local c5 = card(p, 5, "CHAMAR REMOTE")
+        switch(c5, "SPIKE NO REMOTE", "remoteSpike", 1)
+        switch(c5, "SAQUE NO REMOTE", "remoteServe", 2)
+        switch(c5, "POTENCIA INFINITA", "remoteInf", 3)
+        slider(c5, "POTENCIA", "remotePow", 4, 1, 300, function(v) return v .. "" end, 1)
+        switch(c5, "DIRECAO DA CAMERA", "remoteDir", 5)
+        UI.remNote = note(c5, "alternativa · tecla Z = saque", 6)
+
+        local c6 = card(p, 6, "FORCA FIXA")
+        switch(c6, "FORCA FIXA", "alwaysPower", 1)
+        slider(c6, "MULTIPLICADOR", "powMult", 2, 1, 200, function(v) return v .. "x" end, 1)
+        note(c6, "atributo · nao gera o roxo, so muda o numero", 3)
+
+        local c7 = card(p, 7, "TRAVAR BARRA")
+        switch(c7, "TRAVAR BARRA", "pinMeter", 1, function(on)
+            if on then safe(buildPins) else safe(clearPins) end
+        end)
+        slider(c7, "VALOR DA BARRA", "pinPct", 2, 10, 100, function(v) return v .. "%" end, 1)
+        UI.meterNote = note(c7, "alvo: procurando", 3)
+
+        local c8 = card(p, 8, "LEITURA DE QUEDA")
+        slider(c8, "RAIO DE QUEDA", "reach", 1, 2, 25, function(v) return v .. "st" end)
+        slider(c8, "ALTURA SPIKE", "spikeH", 2, 2, 20, function(v) return v .. "st" end)
+        slider(c8, "RAIO SPIKE", "spikeR", 3, 2, 25, function(v) return v .. "st" end)
+    end)
+
+    block("MOVIM", function()
+        local p = pg(5)
+        local c1 = card(p, 1, "HABILIDADE")
+        switch(c1, "AUTO HABILIDADE", "autoAbility", 1)
+        slider(c1, "INTERVALO", "abilDelay", 2, 0.15, 5, function(v) return ("%.2fs"):format(v) end, 0.05)
+        UI.abilNote = note(c1, "aciona a habilidade do estilo (Sanju, TSH, Kijo...)", 3)
+        local c2 = card(p, 2, "TILT / DIRECAO")
+        local tiltBtn = button(c2, "TILT: " .. TILTS[State.tiltMode], 1, function()
+            State.tiltMode = (State.tiltMode % #TILTS) + 1
+            tiltBtn.Text = "TILT: " .. TILTS[State.tiltMode]
+            S.tiltHold = os.clock() + 0.4
+        end)
+        note(c2, "RETA = pela lateral · DIAGONAL = cruzado · INVERTIDO = troca o lado · REDE = toque na rede", 2)
+    end)
+
+    showTab(1)
+end
+
+--// ===================== HELPERS =====================
+local function cam() return workspace.CurrentCamera end
+ballRoot = function(b)
+    if not b then return nil end
+    if b:IsA("BasePart") then return b end
+    if b:IsA("Model") then
+        local p = b.PrimaryPart
+        if p then return p end
+        for _, d in ipairs(b:GetChildren()) do
+            if d:IsA("BasePart") and not string.find(string.lower(d.Name), "knx", 1, true) then return d end
+        end
+        return b:FindFirstChildWhichIsA("BasePart", true)
+    end
+end
+local function myRoot()
+    local ch = LP.Character
+    if not ch then return nil end
+    return ch:FindFirstChild("HumanoidRootPart") or ch:FindFirstChildWhichIsA("BasePart")
+end
+local function isBallPart(p)
+    local n = string.lower(p.Name)
+    return not (string.find(n, "knx", 1, true) or string.find(n, "trail", 1, true)
+        or string.find(n, "beam", 1, true))
+end
+
+local function computeRadius(b)
+    local parts = b:IsA("BasePart") and { b } or {}
+    if not b:IsA("BasePart") then
+        for _, d in ipairs(b:GetDescendants()) do
+            if d:IsA("BasePart") and isBallPart(d) then parts[#parts + 1] = d end
+        end
+    end
+    if #parts == 0 then return 1 end
+    local mn, mx
+    for i = 1, math.min(#parts, 40) do
+        local p = parts[i]
+        local half = p.Size * 0.5
+        local lo, hi = p.Position - half, p.Position + half
+        if not mn then
+            mn, mx = lo, hi
+        else
+            mn = Vector3.new(math.min(mn.X, lo.X), math.min(mn.Y, lo.Y), math.min(mn.Z, lo.Z))
+            mx = Vector3.new(math.max(mx.X, hi.X), math.max(mx.Y, hi.Y), math.max(mx.Z, hi.Z))
+        end
+    end
+    if not mn or not mx then return 1 end
+    return math.clamp((mx - mn).Magnitude * 0.5, 0.4, CFG.radCap)
+end
+
+local function ballRadius(b)
+    if not b then return 1 end
+    local cached = S.baseRad[b]
+    if cached then return cached end
+    local r = computeRadius(b)
+    S.baseRad[b] = r
+    return r
+end
+
+local function charRad()
+    if os.clock() - S.charT < 1 then return S.charRad end
+    S.charT = os.clock()
+    local ch = LP.Character
+    if ch then
+        local ok, _, sz = pcall(function() return ch:GetBoundingBox() end)
+        if ok and sz then S.charRad = math.max(sz.X, sz.Z) * 0.5 end
+    end
+    return S.charRad
+end
+
+servePath = function()
+    local p = RS:FindFirstChild("Packages")
+    local idx = p and p:FindFirstChild("_Index")
+    local knit = idx and idx:FindFirstChild("sleitnick_knit@1.7.0")
+    local k = knit and knit:FindFirstChild("knit")
+    local sv = k and k:FindFirstChild("Services")
+    local g = sv and sv:FindFirstChild("GameService")
+    local rf = g and g:FindFirstChild("RF")
+    local s = rf and rf:FindFirstChild("Serve")
     return s
 end
 
-local function grad(o, a, b, rot)
-    local g = Instance.new("UIGradient")
-    g.Color = ColorSequence.new(a, b)
-    g.Rotation = rot or 90
-    g.Parent = o
-    return g
+--// ===================== REMOTE =====================
+local RFR = nil
+local SPIKE_RF = { "Spike", "Hit", "Attack", "Cortada", "Remate", "SpikeHit", "PowerSpike" }
+
+local function rfRoot()
+    if RFR and RFR.Parent then return RFR end
+    local p = RS:FindFirstChild("Packages")
+    local idx = p and p:FindFirstChild("_Index")
+    local knit = idx and idx:FindFirstChild("sleitnick_knit@1.7.0")
+    local k = knit and knit:FindFirstChild("knit")
+    local sv = k and k:FindFirstChild("Services")
+    local g = sv and sv:FindFirstChild("GameService")
+    RFR = g and g:FindFirstChild("RF")
+    return RFR
 end
 
-local function tween(o, props, t)
-    TS:Create(o, TweenInfo.new(t or 0.12), props):Play()
+local function remoteOf(name)
+    local r = rfRoot()
+    if not r then return nil end
+    local o = r:FindFirstChild(name)
+    if o and (o:IsA("RemoteFunction") or o:IsA("RemoteEvent")) then return o end
+    return nil
 end
 
-local function getHum()
-    local c = LP.Character
-    return c and c:FindFirstChildOfClass("Humanoid")
+local function spikeRemote()
+    for _, n in ipairs(SPIKE_RF) do
+        local o = remoteOf(n)
+        if o then return o, n end
+    end
 end
 
-local function getRoot()
-    local c = LP.Character
-    if not c then return nil end
-    return c:FindFirstChild("HumanoidRootPart") or c.PrimaryPart
+local function listRemotes()
+    local r = rfRoot()
+    if not r then
+        setStatus("RF nao encontrado", C.red)
+        return
+    end
+    local names = {}
+    for _, d in ipairs(r:GetChildren()) do
+        names[#names + 1] = d.Name .. " (" .. d.ClassName .. ")"
+    end
+    if #names == 0 then
+        setStatus("RF vazio", C.amber)
+        return
+    end
+    out("REMOTES:", table.concat(names, " | "))
+    if UI.remNote then UI.remNote.Text = table.concat(names, ", "):sub(1, 240) end
+    setStatus("remotes no console", C.accent2)
 end
 
-local ballCache, ballAt = nil, 0
-local function getBall()
-    if ballCache and ballCache.Parent and tick() - ballAt < 1 then return ballCache end
-    ballAt = tick()
-    ballCache = nil
-    for _, v in ipairs(workspace:GetDescendants()) do
-        if v:IsA("BasePart") and v.Name:lower():find("ball") then
-            ballCache = v
-            break
+local function remotePower()
+    if State.remoteInf then return math.huge end
+    return State.remotePow
+end
+
+local function camFlat()
+    local c = cam()
+    if not c then return Vector3.zero end
+    local v = c.CFrame.LookVector
+    v = Vector3.new(v.X, 0, v.Z)
+    if v.Magnitude < 0.01 then return Vector3.zero end
+    return v.Unit
+end
+
+local function fireRemote(which)
+    local p = remotePower()
+    if which == "serve" then
+        local s = remoteOf("Serve")
+        if not s then return false end
+        if s:IsA("RemoteFunction") then
+            return pcall(function() s:InvokeServer(Vector3.zero, p) end)
+        end
+        return pcall(function() s:FireServer(Vector3.zero, p) end)
+    end
+    local r = spikeRemote()
+    if not r then return false end
+    local dir = State.remoteDir and camFlat() or Vector3.zero
+    if r:IsA("RemoteFunction") then
+        if pcall(function() r:InvokeServer(dir, p) end) then return true end
+        if pcall(function() r:InvokeServer(p) end) then return true end
+        return pcall(function() r:InvokeServer() end)
+    end
+    return pcall(function() r:FireServer(dir, p) end)
+end
+
+--// ===================== HOOK NA REDE =====================
+local WIRE = { "spike", "serve", "hit", "attack", "cortada", "remate", "saque", "golpe", "spiking" }
+local wireHooked = false
+
+local function wireName(n)
+    n = string.lower(n)
+    for _, k in ipairs(WIRE) do
+        if string.find(n, k, 1, true) then return true end
+    end
+    return false
+end
+
+local function installWire()
+    if wireHooked then return end
+    wireHooked = true
+    local ok = pcall(function()
+        local mt = getrawmetatable(game)
+        local old = mt.__namecall
+        if not old then error("sem __namecall") end
+        local nc = newcclosure or function(f) return f end
+        setreadonly(mt, false)
+        mt.__namecall = nc(function(self, ...)
+            local method = getnamecallmethod()
+            if State.wireMult and (method == "InvokeServer" or method == "FireServer") then
+                local okn, nm = pcall(function() return self.Name end)
+                if okn and type(nm) == "string" and wireName(nm) then
+                    local n = select("#", ...)
+                    local a = { ... }
+                    for i = 1, n do
+                        local v = a[i]
+                        if type(v) == "number" and v >= 0 and v <= 2.5 then
+                            local nv = v * State.wirePow
+                            a[i] = nv
+                            S.lastWire = nm .. " " .. string.format("%.2f", v) .. "→" .. string.format("%.2f", nv)
+                            S.lastWireT = os.clock()
+                            if State.logCalls then
+                                print("[KNX] WIRE", nm, method, v, "->", nv)
+                            end
+                            return old(self, table.unpack(a, 1, n))
+                        end
+                    end
+                end
+            end
+            return old(self, ...)
+        end)
+        setreadonly(mt, true)
+        S.wireMT = mt
+        S.wireOld = old
+    end)
+    if not ok then wireHooked = false end
+end
+
+--// ===================== GRUPOS DE GOLPE =====================
+local MOVES = {
+    { "jumpset", "set" }, { "jump set", "set" }, { "spike", "spike" },
+    { "block", "block" }, { "bloq", "block" }, { "bump", "def" }, { "dive", "def" },
+    { "defesa", "def" }, { "set", "set" }, { "serve", "set" }, { "saque", "set" },
+}
+
+local function groupOf(name)
+    local n = string.lower(name)
+    for _, pair in ipairs(MOVES) do
+        if string.find(n, pair[1], 1, true) then return pair[2] end
+    end
+end
+
+local function moveOf(inst)
+    local g = groupOf(inst.Name)
+    if g then return g end
+    local p = inst.Parent
+    for _ = 1, 3 do
+        if not p or p == workspace then break end
+        g = groupOf(p.Name)
+        if g then return g end
+        p = p.Parent
+    end
+end
+
+local function inChar(inst)
+    local p = inst
+    for _ = 1, 5 do
+        p = p.Parent
+        if not p or p == workspace then return false end
+        if Players:GetPlayerFromCharacter(p) then return true end
+    end
+    return false
+end
+
+local BODY = { "head", "torso", "hand", "foot", "leg", "arm", "humanoidrootpart",
+    "upper", "lower", "handle", "neck", "waist", "shoulder", "hip" }
+
+local function bodyPart(name)
+    local n = string.lower(name)
+    for _, k in ipairs(BODY) do
+        if string.find(n, k, 1, true) then return true end
+    end
+    return false
+end
+
+local MAPWORD = { "wall", "floor", "ceiling", "prop", "decor", "terrain", "sign",
+    "glass", "window", "roof", "ground", "crate", "rock", "tree", "fence", "net",
+    "post", "stand", "crowd", "banner", "light" }
+
+local function mapWord(name)
+    local n = string.lower(name)
+    for _, k in ipairs(MAPWORD) do
+        if string.find(n, k, 1, true) then return true end
+    end
+    return false
+end
+
+--// ===================== TEMPLATES =====================
+local HB = nil
+local hbBase = {}
+local hbRetry = 0
+
+local function folderOk(f)
+    local n, small = 0, 0
+    for _, d in ipairs(f:GetDescendants()) do
+        if d:IsA("BasePart") then
+            n += 1
+            if d.Size.Magnitude <= CFG.maxHBmag then small += 1 end
+            if n > 250 then break end
         end
     end
-    return ballCache
+    return n > 0 and (small / n) >= 0.6
 end
 
--- ============================================================
--- INPUT
--- ============================================================
-local function firePress()
-    local vp = cam.ViewportSize
-    pcall(function()
-        VIM:SendMouseMoveEvent(Vector2.new(vp.X / 2, vp.Y / 2), game, 0)
-        VIM:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, true, game, 0)
-    end)
-    task.wait(0.045)
-    pcall(function()
-        VIM:SendMouseButtonEvent(vp.X / 2, vp.Y / 2, 0, false, game, 0)
-    end)
-end
-
-function doAttack()
-    if tick() - S.lastAtk < 0.1 then return end
-    S.lastAtk = tick()
-    firePress()
-end
-
--- ============================================================
--- HITBOX
--- ============================================================
-local sizeStore = {}
-local hitMark = nil
-
-local function restoreSizes()
-    for part, sz in pairs(sizeStore) do
-        if part and part.Parent then pcall(function() part.Size = sz end) end
+local function resolveHB()
+    if HB and HB.Parent then return HB end
+    if os.clock() < hbRetry then return HB end
+    hbRetry = os.clock() + 3
+    local a = RS:FindFirstChild("Assets")
+    local cand = {}
+    if a then
+        cand[#cand + 1] = a:FindFirstChild("Hitboxes")
+        cand[#cand + 1] = a:FindFirstChild("Hitbox")
     end
-    sizeStore = {}
+    cand[#cand + 1] = RS:FindFirstChild("Hitboxes")
+    cand[#cand + 1] = RS:FindFirstChild("Hitbox")
+    for _, c in ipairs(cand) do
+        if c and c:IsA("Folder") and folderOk(c) then HB = c return HB end
+    end
+    for _, d in ipairs(RS:GetDescendants()) do
+        if d:IsA("Folder") and string.find(string.lower(d.Name), "hitbox", 1, true)
+            and folderOk(d) then HB = d return HB end
+    end
+    return nil
 end
 
-local function clearMark()
-    if hitMark then pcall(function() hitMark:Destroy() end); hitMark = nil end
+local function hbParts()
+    local list = {}
+    local f = resolveHB()
+    if not f then return list end
+    for _, d in ipairs(f:GetDescendants()) do
+        if d:IsA("BasePart") then list[#list + 1] = d end
+    end
+    return list
 end
 
-local function markBall(ball)
-    if not S.hitShow then return end
-    if hitMark and hitMark.Adornee == ball then return end
-    clearMark()
-    if not ball then return end
-    local ok, sb = pcall(function()
-        local b = Instance.new("SelectionBox")
-        b.Adornee = ball
-        b.Color3 = ACC
-        b.LineThickness = 0.05
-        b.SurfaceTransparency = 1
-        b.Parent = ball
-        return b
-    end)
-    if ok then hitMark = sb end
-end
-
-local function applySizeMode()
-    local ball = getBall()
-    if not ball then return end
-    markBall(ball)
-    local orig = sizeStore[ball] or ball.Size
-    sizeStore[ball] = orig
-    local want = orig * S.hitboxSize
-    if (ball.Size - want).Magnitude > 0.01 then
-        pcall(function() ball.Size = want end)
+local function templateFor(g)
+    for _, p in ipairs(hbParts()) do
+        local gg = groupOf(p.Name) or groupOf(p.Parent and p.Parent.Name or "")
+        if gg == g and hbBase[p] then return p end
     end
 end
 
-local function stopHitbox()
-    restoreSizes()
-    clearMark()
+local function cacheBase()
+    for _, p in ipairs(hbParts()) do
+        local m = p.Size.Magnitude
+        if not hbBase[p] and m >= CFG.minHBmag and m <= CFG.maxHBmag then
+            hbBase[p] = p.Size
+        end
+    end
 end
 
--- ============================================================
--- HOOK
--- ============================================================
-local mt, oldNamecall
-local hooked = false
+local function applyTpl()
+    for p, sz in pairs(hbBase) do
+        if p.Parent and sz.Magnitude <= CFG.maxHBmag then
+            local want = (State.hbOn and State.hbReal) and (sz * State.hbMult) or sz
+            local mag = want.Magnitude
+            if mag > CFG.maxOut then want = want * (CFG.maxOut / mag) end
+            if (p.Size - want).Magnitude > CFG.eps then safe(function() p.Size = want end) end
+        end
+    end
+end
 
-local function installHook()
-    local ok, m = pcall(getrawmetatable, game)
-    if not ok or not m then return end
-    local nc = newcclosure or function(f) return f end
-    mt, oldNamecall = m, m.__namecall
-    pcall(setreadonly, m, false)
-    m.__namecall = nc(function(self, ...)
-        local method = getnamecallmethod()
+--// ===================== HITBOX VIVA =====================
+local function watchPart(part)
+    if not part:IsA("BasePart") then return end
+    if part.Name == "KNXBox" then return end
+    if S.live[part] then return end
+    local mine = inChar(part)
+    local folder = resolveHB()
+    local inHB = folder ~= nil and part:IsDescendantOf(folder)
+    if not mine and not inHB then
+        if not (groupOf(part.Name) and bodyPart(part.Name)) then return end
+        if mapWord(part.Name) then return end
+    end
+    local g = moveOf(part)
+    if not g then return end
+    if part.Size.Magnitude > (mine and 40 or CFG.maxHBmag) then return end
+    local tpl = templateFor(g)
+    local base = (tpl and hbBase[tpl]) or part.Size
+    if base.Magnitude < CFG.minHBmag then return end
+    S.live[part] = { base = base, group = g, applied = part.Size,
+        touch = part.CanTouch, query = part.CanQuery }
+end
 
-        if S.hitbox and S.hitMode == "HOOK" then
-            if method == "GetPartBoundsInBox" then
-                local cf, sz, prm = ...
-                if typeof(sz) == "Vector3" then
-                    return oldNamecall(self, cf, sz * S.hitboxSize, prm)
-                end
-            elseif method == "GetPartBoundsInRadius" then
-                local pos, rad, prm = ...
-                if typeof(rad) == "number" then
-                    return oldNamecall(self, pos, rad * S.hitboxSize, prm)
-                end
-            elseif method == "GetPartsInPart" then
-                local part, prm = ...
-                if typeof(part) == "Instance" and part:IsA("BasePart") then
-                    local okc, res = pcall(function()
-                        return self.GetPartBoundsInBox(self, part.CFrame, part.Size * S.hitboxSize, prm)
-                    end)
-                    if okc then return res end
+local function applyLive()
+    if not (State.hbOn and State.hbReal) then return end
+    for part, rec in pairs(S.live) do
+        if not part.Parent then
+            S.live[part] = nil
+        else
+            if rec.applied and (part.Size - rec.applied).Magnitude > 0.05
+                and (part.Size - rec.base).Magnitude > 0.05 then
+                rec.base = part.Size
+            end
+            local want = rec.base * State.hbMult
+            local mag = want.Magnitude
+            if mag > CFG.maxOut then want = want * (CFG.maxOut / mag) end
+            if (part.Size - want).Magnitude > CFG.eps then
+                safe(function() part.Size = want end)
+                rec.applied = want
+            else
+                rec.applied = part.Size
+            end
+            part.CanTouch = true
+            if State.hbQuery then part.CanQuery = true end
+        end
+    end
+end
+
+local function restoreLive()
+    for p, rec in pairs(S.live) do
+        if p.Parent then
+            safe(function() p.Size = rec.base end)
+            pcall(function() p.CanTouch = rec.touch end)
+            pcall(function() p.CanQuery = rec.query end)
+        end
+    end
+end
+
+local function restoreTpl()
+    for p, sz in pairs(hbBase) do
+        if p.Parent then safe(function() p.Size = sz end) end
+    end
+end
+
+restoreAll = function()
+    restoreLive()
+    restoreTpl()
+end
+
+local function sweepLive()
+    for _, d in ipairs(workspace:GetDescendants()) do
+        if d:IsA("BasePart") and (bodyPart(d.Name) or groupOf(d.Name)) then
+            watchPart(d)
+        end
+    end
+end
+
+bind(workspace.DescendantAdded:Connect(function(d)
+    if d:IsA("BasePart") and (bodyPart(d.Name) or groupOf(d.Name)) then watchPart(d) end
+end))
+
+--// ===================== ESFERA NA BOLA =====================
+local function killBox()
+    if S.box then safe(function() S.box:Destroy() end) S.box = nil end
+end
+
+local function applyBox(ball, root)
+    if not (State.hbOn and State.hbClient) then killBox() return end
+    local base = S.baseRad[ball]
+    if not base then
+        base = computeRadius(ball)
+        S.baseRad[ball] = base
+    end
+    local d = math.clamp(base * State.hbMult * 2, 0.6, CFG.maxOut * 2)
+    local box = S.box
+    if not box or box.Parent ~= ball then
+        killBox()
+        box = mk("Part", { Name = "KNXBox", Shape = Enum.PartType.Ball,
+            Size = Vector3.new(d, d, d), Transparency = 1, CanCollide = false,
+            Anchored = true, Massless = true, CastShadow = false,
+            CanTouch = true, CanQuery = State.hbQuery, CFrame = root.CFrame,
+            Parent = ball })
+        S.box = box
+    else
+        if math.abs(box.Size.X - d) > 0.05 then
+            safe(function() box.Size = Vector3.new(d, d, d) end)
+        end
+        box.CFrame = root.CFrame
+    end
+    box.CanTouch = true
+    box.CanQuery = State.hbQuery
+end
+
+--// ===================== BOLAS =====================
+local function ballTier(b)
+    local n = string.lower(b.Name)
+    if string.find(n, "client_ball", 1, true) then return 3 end
+    if not (string.find(n, "ball", 1, true) or string.find(n, "bola", 1, true)) then return 0 end
+    if b:IsA("BasePart") then return b.CanCollide and 1 or 2 end
+    for _, d in ipairs(b:GetDescendants()) do
+        if d:IsA("BasePart") then
+            local dn = string.lower(d.Name)
+            if string.find(dn, "sphere", 1, true) or string.find(dn, "cube", 1, true)
+                or string.find(dn, "ball", 1, true) then return 2 end
+        end
+    end
+    return 1
+end
+
+local function modelOk(b)
+    local n, mag, soft = 0, 0, false
+    if b:IsA("BasePart") then
+        mag = b.Size.Magnitude
+        soft = not b.CanCollide
+    else
+        local piv = b:GetPivot().Position
+        for _, d in ipairs(b:GetDescendants()) do
+            if d:IsA("BasePart") and isBallPart(d) then
+                n += 1
+                if not d.CanCollide then soft = true end
+                mag = math.max(mag, (d.Position - piv).Magnitude + d.Size.Magnitude)
+                if n > CFG.maxModelParts then return false end
+            end
+        end
+    end
+    return (soft or n <= 4) and mag <= CFG.maxModelMag and n <= CFG.maxModelParts
+end
+
+local function register(b)
+    if not b or not b.Parent then return end
+    if not (b:IsA("Model") or b:IsA("BasePart")) then return end
+    if S.balls[b] then
+        if os.clock() - S.balls[b] > 5 then S.balls[b] = os.clock() end
+        return
+    end
+    if not modelOk(b) then return end
+    if not ballRoot(b) then return end
+    if not S.baseRad[b] then S.baseRad[b] = computeRadius(b) end
+    S.tier[b] = ballTier(b)
+    S.balls[b] = os.clock()
+end
+
+local function scan()
+    local containers = { workspace }
+    local map = workspace:FindFirstChild("Map")
+    if map then containers[#containers + 1] = map end
+    local bc = workspace:FindFirstChild("BallNoCollide")
+    if bc then containers[#containers + 1] = bc end
+    local found, best = {}, 0
+    for _, cont in ipairs(containers) do
+        for _, o in ipairs(cont:GetChildren()) do
+            if o:IsA("Model") or o:IsA("BasePart") then
+                local t = ballTier(o)
+                if t > 0 and modelOk(o) then
+                    found[#found + 1] = { o, t }
+                    if t > best then best = t end
                 end
             end
         end
-
-        if method == "InvokeServer" and typeof(self) == "Instance" then
-            local n = self.Name:lower()
-            local args = { ... }
-            if n:find("spike") then S.lastSpike = args
-            elseif n:find("serve") then S.lastServe = args
-            elseif n:find("inf") then S.lastInf = args end
+    end
+    local cut = math.min(best, 2)
+    for _, e in ipairs(found) do
+        if e[2] >= cut then register(e[1]) end
+    end
+    local now = os.clock()
+    for b in pairs(S.balls) do
+        if not b.Parent or now - S.balls[b] > 20 then
+            S.balls[b] = nil
+            S.tier[b] = nil
+            if S.ball ~= b then S.baseRad[b] = nil end
         end
-
-        return oldNamecall(self, ...)
-    end)
-    pcall(setreadonly, m, true)
-    hooked = true
-end
-
-local function unhook()
-    if mt and oldNamecall then
-        pcall(setreadonly, mt, false)
-        mt.__namecall = oldNamecall
-        pcall(setreadonly, mt, true)
-    end
-    hooked = false
-end
-
-local function findRF(pattern)
-    for _, v in ipairs(game:GetService("ReplicatedStorage"):GetDescendants()) do
-        if v:IsA("RemoteFunction") and v.Name:lower():find(pattern) then return v end
     end
 end
 
-local function fireRemote(pattern, args)
-    local rf = findRF(pattern)
-    if not rf then return end
-    pcall(function()
-        if args and #args > 0 then rf:InvokeServer(table.unpack(args))
-        else rf:InvokeServer() end
+local function pickBall()
+    local r = myRoot()
+    if not r then return nil end
+    local best, bs, count = nil, -1e9, 0
+    for b in pairs(S.balls) do
+        if count < CFG.maxCand then
+            count += 1
+            local root = ballRoot(b)
+            if root then
+                local d = (root.Position - r.Position).Magnitude
+                if d < 400 then
+                    local s = 1000 - d * 1.4 + (S.tier[b] or 0) * 200
+                    if b:IsA("Model") then s += 40 end
+                    if s > bs then best, bs = b, s end
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function setBall(b)
+    if S.ball == b then return end
+    killBox()
+    S.ball, S.prev, S.vel, S.hits = b, nil, Vector3.zero, 0
+    if b and not S.baseRad[b] then S.baseRad[b] = computeRadius(b) end
+end
+
+local function pickAt(x, y)
+    local c = cam()
+    if not c then return end
+    local rp = RaycastParams.new()
+    rp.FilterType = Enum.RaycastFilterType.Exclude
+    local f = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Character then f[#f + 1] = p.Character end
+    end
+    rp.FilterDescendantsInstances = f
+    local ray = c:ViewportPointToRay(x, y)
+    local hit = workspace:Raycast(ray.Origin, ray.Direction * 400, rp)
+    if hit and hit.Instance then
+        local target = hit.Instance
+        local m = target:FindFirstAncestorOfClass("Model")
+        if m and not Players:GetPlayerFromCharacter(m) then target = m end
+        register(target)
+        S.forced = target
+        setBall(target)
+    end
+end
+
+local function inPanel(x, y)
+    if not UI.win or not UI.win.Visible then return false end
+    local ap, as = UI.win.AbsolutePosition, UI.win.AbsoluteSize
+    return x >= ap.X and x <= ap.X + as.X and y >= ap.Y and y <= ap.Y + as.Y
+end
+
+bind(UIS.InputBegan:Connect(function(i)
+    if i.UserInputType ~= Enum.UserInputType.Touch and i.UserInputType ~= Enum.UserInputType.MouseButton1 then return end
+    local x, y = i.Position.X, i.Position.Y
+    if inPanel(x, y) then return end
+    if UI.icon and UI.icon.Visible then
+        local ia, isz = UI.icon.AbsolutePosition, UI.icon.AbsoluteSize
+        if x >= ia.X and x <= ia.X + isz.X and y >= ia.Y and y <= ia.Y + isz.Y then return end
+    end
+    if S.pick then
+        S.pick = false
+        safe(function() pickAt(x, y) end)
+        return
+    end
+    if State.mode == 3 then S.manual = Vector2.new(x, y) end
+end))
+
+bind(UIS.InputBegan:Connect(function(i, gp)
+    if gp then return end
+    if i.KeyCode ~= Enum.KeyCode.Z then return end
+    if not State.remoteServe then return end
+    if fireRemote("serve") then
+        S.rfHits += 1
+        setStatus("saque no remote", C.green)
+    else
+        S.rfFail += 1
+        setStatus("remote de saque ausente", C.amber)
+    end
+end))
+
+--// ===================== FORCA FIXA =====================
+local POWKEYS = { "GameSpikePowerMultiplier", "GameServePowerMultiplier" }
+
+local function applyPow()
+    if not State.alwaysPower then return end
+    for _, k in ipairs(POWKEYS) do
+        safe(function() LP:SetAttribute(k, State.powMult) end)
+    end
+end
+
+for _, k in ipairs(POWKEYS) do
+    local ok, sig = pcall(function() return LP:GetAttributeChangedSignal(k) end)
+    if ok and sig then
+        bind(sig:Connect(function()
+            if not State.alwaysPower then return end
+            local cur = LP:GetAttribute(k)
+            if type(cur) == "number" and math.abs(cur - State.powMult) > 0.01 then
+                safe(function() LP:SetAttribute(k, State.powMult) end)
+            end
+        end))
+    end
+end
+
+--// ===================== BARRA / PIN =====================
+local MKEY = { "charge", "carga", "meter", "medidor", "super", "spike", "power",
+    "bar", "fill", "energy", "boost", "forca" }
+
+local function nameHit(n)
+    n = string.lower(n)
+    if string.sub(n, 1, 4) == "game" then return false end
+    for _, k in ipairs(MKEY) do
+        if string.find(n, k, 1, true) then return true end
+    end
+    return false
+end
+
+local function findMeter()
+    if os.clock() - S.meterT < 2 then return S.meterList end
+    S.meterT = os.clock()
+    local list = {}
+    local function attrs(inst, depth)
+        if not inst or #list >= 8 then return end
+        local ok, a = pcall(function() return inst:GetAttributes() end)
+        if ok and a then
+            for k, v in pairs(a) do
+                if type(v) == "number" and nameHit(k) then
+                    list[#list + 1] = { inst = inst, key = k, seen = v }
+                    if #list >= 8 then return end
+                end
+            end
+        end
+        if depth > 0 then
+            local okc, kids = pcall(function() return inst:GetChildren() end)
+            if okc and kids then
+                for _, d in ipairs(kids) do
+                    if #list >= 8 then return end
+                    attrs(d, depth - 1)
+                end
+            end
+        end
+    end
+    attrs(LP, 2)
+    local ch = LP.Character
+    if ch then attrs(ch, 2) end
+    local pg = LP:FindFirstChildOfClass("PlayerGui")
+    if pg then attrs(pg, 2) end
+    for _, root in ipairs({ LP, ch, pg }) do
+        if root and #list < 8 then
+            for _, d in ipairs(root:GetDescendants()) do
+                if #list >= 8 then break end
+                if (d:IsA("NumberValue") or d:IsA("IntValue")) and nameHit(d.Name) then
+                    list[#list + 1] = { obj = d, seen = d.Value }
+                end
+            end
+        end
+    end
+    S.meterList = list
+    return list
+end
+
+local function pinValue(p)
+    local pct = State.pinPct / 100
+    local val = p.full and State.pinPct or pct
+    if p.key then
+        safe(function() p.inst:SetAttribute(p.key, val) end)
+    elseif p.obj then
+        safe(function() p.obj.Value = val end)
+    end
+end
+
+local function clearPins()
+    for _, c in ipairs(S.pinConns) do pcall(function() c:Disconnect() end) end
+    S.pinConns = {}
+    S.pins = {}
+end
+
+local function buildPins()
+    clearPins()
+    local list = findMeter()
+    for _, p in ipairs(list) do
+        p.full = (type(p.seen) == "number" and p.seen > 1.5) or false
+        S.pins[#S.pins + 1] = p
+        local c
+        if p.key then
+            local ok, sig = pcall(function() return p.inst:GetAttributeChangedSignal(p.key) end)
+            if ok and sig then c = sig:Connect(function()
+                local now = p.inst:GetAttribute(p.key)
+                if type(now) == "number" and now > 1.5 then p.full = true end
+                pinValue(p)
+            end) end
+        elseif p.obj then
+            local ok, sig = pcall(function() return p.obj:GetPropertyChangedSignal("Value") end)
+            if ok and sig then c = sig:Connect(function()
+                if type(p.obj.Value) == "number" and p.obj.Value > 1.5 then p.full = true end
+                pinValue(p)
+            end) end
+        end
+        if c then S.pinConns[#S.pinConns + 1] = c end
+        pinValue(p)
+    end
+end
+
+--// ===================== HABILIDADE / TILT =====================
+local ABILWORD = { "habil", "abilit", "skill", "poder", "power", "special", "ult", "estilo" }
+
+local function findAbilBtn()
+    if os.clock() - S.abilScanT < 1 then return S.abilBtn end
+    S.abilScanT = os.clock()
+    S.abilBtn = nil
+    local pg = LP:FindFirstChildOfClass("PlayerGui")
+    if not pg then return nil end
+    for _, b in ipairs(pg:GetDescendants()) do
+        if b:IsA("GuiButton") and b.Visible and not b:IsDescendantOf(UI.gui) then
+            local n = string.lower(b.Name)
+            for _, w in ipairs(ABILWORD) do
+                if string.find(n, w, 1, true) then
+                    local as = b.AbsoluteSize
+                    if as.X > 22 and as.Y > 22 then
+                        S.abilBtn = b
+                        return b
+                    end
+                    break
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function pressAbility()
+    local now = os.clock()
+    if now - S.abilT < State.abilDelay then return end
+    S.abilT = now
+    local b = findAbilBtn()
+    if b and b.Parent and b.Visible then
+        local ap, as = b.AbsolutePosition, b.AbsoluteSize
+        local ins = GuiService:GetGuiInset()
+        press(ap.X + as.X * 0.5 + ins.X, ap.Y + as.Y * 0.5 + ins.Y)
+    else
+        safe(function() VIM:SendKeyEvent(true, Enum.KeyCode.Q, false, game) end)
+        task.delay(0.05, function()
+            safe(function() VIM:SendKeyEvent(false, Enum.KeyCode.Q, false, game) end)
+        end)
+    end
+end
+
+local function netPart()
+    if S.netCache and S.netCache.Parent then return S.netCache end
+    if os.clock() - S.netT < 5 then return S.netCache end
+    S.netT = os.clock()
+    S.netCache = nil
+    local cont = workspace:FindFirstChild("Map") or workspace
+    for _, d in ipairs(cont:GetDescendants()) do
+        local n = string.lower(d.Name)
+        if d:IsA("BasePart") and (string.find(n, "net", 1, true) or string.find(n, "rede", 1, true)) then
+            S.netCache = d
+            return d
+        end
+    end
+    return nil
+end
+
+local function applyTilt()
+    if State.tiltMode == 1 then return end
+    local c = cam()
+    local r = myRoot()
+    local net = netPart()
+    if not c or not r then return end
+    local dir
+    if net then
+        local to = r.Position - net.Position
+        local along = net.CFrame.RightVector
+        local across = net.CFrame.LookVector
+        local sA = (to:Dot(across) >= 0) and 1 or -1
+        local sS = (to:Dot(along) >= 0) and 1 or -1
+        local base = across * sA
+        local side = along * sS
+        if State.tiltMode == 2 then dir = base + side * 0.55
+        elseif State.tiltMode == 3 then dir = base - side * 0.8
+        elseif State.tiltMode == 4 then dir = base - side * 0.55
+        else dir = base * 0.4 end
+        dir = Vector3.new(dir.X, 0, dir.Z)
+        if dir.Magnitude < 0.01 then return end
+        local look = r.Position + dir.Unit * 45 + Vector3.new(0, 7, 0)
+        c.CFrame = CFrame.new(c.CFrame.Position, look)
+        S.tiltHold = os.clock() + 0.18
+    else
+        local base = c.CFrame.LookVector
+        local side = c.CFrame.RightVector
+        if State.tiltMode == 2 then dir = base + side * 0.4
+        elseif State.tiltMode == 3 then dir = base - side * 0.6
+        elseif State.tiltMode == 4 then dir = base - side * 0.4
+        else dir = base end
+        local look = r.Position + dir.Unit * 45 + Vector3.new(0, 7, 0)
+        c.CFrame = CFrame.new(c.CFrame.Position, look)
+        S.tiltHold = os.clock() + 0.18
+    end
+end
+
+--// ===================== INPUT =====================
+press = function(x, y)
+    local c = cam()
+    local vs = c and c.ViewportSize or Vector2.new(720, 1280)
+    x = math.clamp(x, 2, vs.X - 2)
+    y = math.clamp(y, 2, vs.Y - 2)
+    local h = math.max(State.hold, 0.012)
+    safe(function() VIM:SendMouseMoveEvent(x, y, game) end)
+    safe(function() VIM:SendMouseButtonEvent(x, y, 0, true, game, 0) end)
+    task.delay(h, function()
+        safe(function() VIM:SendMouseButtonEvent(x, y, 0, false, game, 0) end)
     end)
 end
 
--- ============================================================
--- SUPER SPIKE / AIM
--- ============================================================
-local function superSpike()
-    local hum, root = getHum(), getRoot()
-    if not hum or not root then return end
-    local ball = getBall()
-    local dir = ball and (ball.Position - root.Position).Unit or Vector3.new(0, 0, -1)
-    root.AssemblyLinearVelocity = Vector3.new(dir.X * S.ssPower, 42, dir.Z * S.ssPower)
-    task.wait(S.ssTime)
+local BTNH = { "colis", "atac", "hit", "spike", "bump", "cortar", "remate",
+    "defin", "mergulho", "dive", "bloque" }
+
+local function findBtn()
+    local pg = LP:FindFirstChildOfClass("PlayerGui")
+    local c = cam()
+    if not pg or not c then return nil end
+    local vs = c.ViewportSize
+    local best, bs = nil, 0
+    for _, b in ipairs(pg:GetDescendants()) do
+        if b:IsA("GuiButton") and b.Visible and not b:IsDescendantOf(UI.gui) then
+            local as = b.AbsoluteSize
+            if as.X > 24 and as.Y > 24 then
+                local ap = b.AbsolutePosition
+                local cx, cy = ap.X + as.X * 0.5, ap.Y + as.Y * 0.5
+                if cx > 1 and cy > 1 and cx < vs.X - 1 and cy < vs.Y - 1 then
+                    local nm = string.lower(b.Name)
+                    local s = 0
+                    for _, h in ipairs(BTNH) do
+                        if string.find(nm, h, 1, true) then s += 100 end
+                    end
+                    if s > 0 then
+                        if cy > vs.Y * 0.55 then s += 30 end
+                        if cx > vs.X * 0.55 and cy > vs.Y * 0.55 then s += 40 end
+                    end
+                    if s > bs then best, bs = b, s end
+                end
+            end
+        end
+    end
+    return best
+end
+
+local function btnPoint()
+    if os.clock() - S.btnT > 1.5 then
+        S.btnT = os.clock()
+        S.btn = findBtn()
+    end
+    local btn = S.btn
+    if not btn or not btn.Parent then return nil end
+    local ap, as = btn.AbsolutePosition, btn.AbsoluteSize
+    local ins = GuiService:GetGuiInset()
+    return Vector2.new(ap.X + as.X * 0.5 + ins.X, ap.Y + as.Y * 0.5 + ins.Y)
+end
+
+pressPoint = function()
+    local b = S.ball
+    local c = cam()
+    if not b or not c then return nil end
+    local r = ballRoot(b)
+    if not r then return nil end
+    if State.mode == 1 then
+        local v = c:WorldToViewportPoint(r.Position)
+        if v.Z > 0 then return Vector2.new(v.X, v.Y) end
+        return btnPoint() or S.manual
+    elseif State.mode == 2 then
+        return btnPoint() or S.manual
+    end
+    return S.manual
+end
+
+local function doAttack()
+    local now = os.clock()
+    if now - S.lastPress < CFG.cd then return end
+    local pos = pressPoint()
+    if not pos then return end
+    S.lastPress = now
+    S.hits += 1
+    if State.tiltMode > 1 then safe(applyTilt) end
+    press(pos.X, pos.Y)
+end
+
+local function doSpike()
+    local now = os.clock()
+    if now - S.lastPress < CFG.cd then return end
+    if State.tiltMode > 1 then safe(applyTilt) end
+    if State.remoteSpike then
+        if fireRemote("spike") then
+            S.lastPress = now
+            S.hits += 1
+            S.rfHits += 1
+            return
+        end
+        S.rfFail += 1
+    end
     doAttack()
 end
 
-local function applyAim()
-    if not S.aim then return end
-    local ball = getBall()
-    if not ball then return end
-    local vp = cam.ViewportSize
-    local p, on = cam:WorldToViewportPoint(ball.Position)
-    if not on then return end
-    local c = Vector2.new(vp.X / 2, vp.Y / 2)
-    if (Vector2.new(p.X, p.Y) - c).Magnitude > S.aimFov then return end
-    cam.CFrame = cam.CFrame:Lerp(CFrame.lookAt(cam.CFrame.Position, ball.Position), math.clamp(S.aimSmooth, 0.05, 1))
-end
-
--- ============================================================
--- ESP (BillboardGui)
--- ============================================================
-local espSet = {}
-
-local function killESP(plr)
-    local e = espSet[plr]
-    if not e then return end
-    for _, v in pairs(e) do pcall(function() v:Destroy() end) end
-    espSet[plr] = nil
-end
-
-local function buildESP(plr)
-    local char = plr.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
-    if not root then return end
-
-    local bb = Instance.new("BillboardGui")
-    bb.Name = "KNX_ESP"
-    bb.Size = UDim2.fromScale(4.2, 5.4)
-    bb.StudsOffset = Vector3.new(0, 3.2, 0)
-    bb.AlwaysOnTop = true
-    bb.LightInfluence = 0
-    bb.MaxDistance = 400
-    bb.Adornee = root
-    bb.Parent = root
-
-    local box = Instance.new("Frame")
-    box.Size = UDim2.fromScale(1, 1)
-    box.BackgroundColor3 = ACC
-    box.BackgroundTransparency = 0.9
-    box.BorderSizePixel = 0
-    box.Parent = bb
-    local st = Instance.new("UIStroke")
-    st.Color = ACC
-    st.Thickness = 1.4
-    st.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    st.Parent = box
-
-    local hpBg = Instance.new("Frame")
-    hpBg.Size = UDim2.new(0.09, 0, 1, 0)
-    hpBg.Position = UDim2.new(-0.16, 0, 0, 0)
-    hpBg.BackgroundColor3 = Color3.fromRGB(18, 15, 26)
-    hpBg.BorderSizePixel = 0
-    hpBg.Parent = bb
-
-    local hp = Instance.new("Frame")
-    hp.Size = UDim2.fromScale(1, 1)
-    hp.Position = UDim2.fromScale(0, 0)
-    hp.BackgroundColor3 = GOOD
-    hp.BorderSizePixel = 0
-    hp.Parent = hpBg
-
-    local nameL = Instance.new("TextLabel")
-    nameL.Size = UDim2.new(1.6, 0, 0.2, 0)
-    nameL.Position = UDim2.new(-0.3, 0, -0.24, 0)
-    nameL.BackgroundTransparency = 1
-    nameL.Font = Enum.Font.GothamBold
-    nameL.TextScaled = true
-    nameL.TextColor3 = ACC
-    nameL.TextStrokeTransparency = 0.3
-    nameL.Text = plr.Name
-    nameL.Parent = bb
-
-    local distL = Instance.new("TextLabel")
-    distL.Size = UDim2.new(1.6, 0, 0.16, 0)
-    distL.Position = UDim2.new(-0.3, 0, -0.04, 0)
-    distL.BackgroundTransparency = 1
-    distL.Font = Enum.Font.Code
-    distL.TextScaled = true
-    distL.TextColor3 = DIM
-    distL.TextStrokeTransparency = 0.4
-    distL.Text = ""
-    distL.Parent = bb
-
-    espSet[plr] = { bb = bb, box = box, st = st, hpBg = hpBg, hp = hp, nameL = nameL, distL = distL }
-end
-
-local function syncESP()
-    if not S.esp then
-        for plr in pairs(espSet) do killESP(plr) end
-        return
-    end
-
-    for _, plr in ipairs(Players:GetPlayers()) do
-        if plr ~= LP then
-            local e = espSet[plr]
-            local char = plr.Character
-            local root = char and char:FindFirstChild("HumanoidRootPart")
-            local hum = char and char:FindFirstChildOfClass("Humanoid")
-
-            if not (root and hum) then
-                killESP(plr)
-            else
-                if not e or not e.bb.Parent then
-                    killESP(plr)
-                    buildESP(plr)
-                    e = espSet[plr]
-                end
-                if e then
-                    local alive = hum.Health > 0
-                    local col = alive and ACC or Color3.fromRGB(150, 145, 165)
-                    e.st.Color = col
-                    e.box.BackgroundColor3 = col
-                    e.box.BackgroundTransparency = S.espFill and 0.9 or 1
-                    e.box.Visible = S.espBox
-                    e.hpBg.Visible = S.espHp
-                    e.nameL.Visible = S.espName
-                    e.distL.Visible = S.espDist
-
-                    local pct = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1)
-                    e.hp.Size = UDim2.fromScale(1, pct)
-                    e.hp.Position = UDim2.fromScale(0, 1 - pct)
-                    e.hp.BackgroundColor3 = pct > 0.5 and GOOD or (pct > 0.22 and WARN or Color3.fromRGB(240, 96, 110))
-
-                    local d = (cam.CFrame.Position - root.Position).Magnitude
-                    e.distL.Text = math.floor(d) .. "m"
-                    e.nameL.Text = plr.Name
-                end
-            end
-        end
-    end
-end
-
--- marcador da bola
-local ballMark
-local function syncBallESP()
-    if not S.espBall then
-        if ballMark then pcall(function() ballMark:Destroy() end); ballMark = nil end
-        return
-    end
-    local ball = getBall()
-    if not ball then return end
-    if ballMark and ballMark.Parent == ball then return end
-    if ballMark then pcall(function() ballMark:Destroy() end) end
-    local ok, bb = pcall(function()
-        local b = Instance.new("BillboardGui")
-        b.Size = UDim2.fromScale(1.6, 1.6)
-        b.AlwaysOnTop = true
-        b.LightInfluence = 0
-        b.Adornee = ball
-        b.Parent = ball
-        local t = Instance.new("TextLabel")
-        t.Size = UDim2.fromScale(1, 1)
-        t.BackgroundTransparency = 1
-        t.Font = Enum.Font.GothamBold
-        t.TextScaled = true
-        t.TextColor3 = Color3.fromRGB(255, 255, 255)
-        t.TextStrokeTransparency = 0.2
-        t.Text = "+"
-        t.Parent = b
-        return b
-    end)
-    if ok then ballMark = bb end
-end
-
--- ============================================================
--- UI
--- ============================================================
-local gui = new("ScreenGui", {
-    Name = "Kennex", ResetOnSpawn = false,
-    IgnoreGuiInset = true, DisplayOrder = 999,
-    ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-})
-local okGui = pcall(function() gui.Parent = CoreGui end)
-if not okGui then gui.Parent = LP:WaitForChild("PlayerGui") end
-
-local main = new("Frame", {
-    Size = UDim2.fromOffset(452, 328),
-    Position = UDim2.new(0, 40, 0, 90),
-    BackgroundColor3 = BG, BorderSizePixel = 0,
-}, gui)
-corner(main, 14); stroke(main, Color3.fromRGB(66, 52, 96), 1)
-
-local head = new("Frame", {
-    Size = UDim2.new(1, 0, 0, 44), BackgroundColor3 = PANEL, BorderSizePixel = 0,
-}, main)
-corner(head, 14)
-new("Frame", {
-    Size = UDim2.new(1, 0, 0, 4), BackgroundColor3 = ACC2, BorderSizePixel = 0,
-}, head)
-grad(head, Color3.fromRGB(58, 38, 104), PANEL, 90)
-
--- logo K
-local badge = new("Frame", {
-    Size = UDim2.fromOffset(26, 26), Position = UDim2.fromOffset(12, 9),
-    BackgroundColor3 = ACC2, BorderSizePixel = 0,
-}, head)
-corner(badge, 7)
-grad(badge, ACC, ACC2, 45)
-new("Frame", {
-    Size = UDim2.fromOffset(3, 16), Position = UDim2.fromOffset(7, 5),
-    BackgroundColor3 = Color3.fromRGB(246, 243, 255), BorderSizePixel = 0,
-}, badge)
-local d1 = new("Frame", {
-    Size = UDim2.fromOffset(3, 11), Position = UDim2.fromOffset(13, 3),
-    BackgroundColor3 = Color3.fromRGB(246, 243, 255), BorderSizePixel = 0,
-}, badge)
-d1.Rotation = 38
-local d2 = new("Frame", {
-    Size = UDim2.fromOffset(3, 11), Position = UDim2.fromOffset(13, 12),
-    BackgroundColor3 = Color3.fromRGB(246, 243, 255), BorderSizePixel = 0,
-}, badge)
-d2.Rotation = -38
-
-new("TextLabel", {
-    Size = UDim2.fromOffset(120, 18), Position = UDim2.fromOffset(46, 6),
-    BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 14,
-    TextColor3 = TXT, TextXAlignment = Enum.TextXAlignment.Left, Text = "KENNEX",
-}, head)
-new("TextLabel", {
-    Size = UDim2.fromOffset(120, 12), Position = UDim2.fromOffset(46, 24),
-    BackgroundTransparency = 1, Font = Enum.Font.Code, TextSize = 9,
-    TextColor3 = DIM, TextXAlignment = Enum.TextXAlignment.Left, Text = "v45 · volleyball",
-}, head)
-
-local function hdrBtn(txt, x, col, bg)
-    local b = new("TextButton", {
-        Size = UDim2.fromOffset(24, 22), Position = UDim2.new(1, x, 0, 11),
-        BackgroundColor3 = bg, BorderSizePixel = 0,
-        Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = col,
-        Text = txt, AutoButtonColor = false,
-    }, head)
-    corner(b, 5)
-    return b
-end
-
-local closeBtn = hdrBtn("x", -32, Color3.fromRGB(255, 140, 150), Color3.fromRGB(52, 30, 40))
-local miniBtn  = hdrBtn("-", -60, ACC, Color3.fromRGB(44, 34, 66))
-
-closeBtn.MouseButton1Click:Connect(function() S.open = false; main.Visible = false end)
-miniBtn.MouseButton1Click:Connect(function()
-    S.mini = not S.mini
-    main.Size = S.mini and UDim2.fromOffset(452, 44) or UDim2.fromOffset(452, 328)
-end)
-
-local dragging, dragStart, startPos
-conn(head.InputBegan, function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-        dragging = true; dragStart = i.Position; startPos = main.Position
-    end
-end)
-conn(UIS.InputChanged, function(i)
-    if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-        local d = i.Position - dragStart
-        main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
-    end
-end)
-conn(UIS.InputEnded, function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-        dragging = false
-    end
-end)
-
-local tabBar = new("Frame", {
-    Size = UDim2.new(1, -18, 0, 24), Position = UDim2.fromOffset(9, 50),
-    BackgroundTransparency = 1,
-}, main)
-new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4) }, tabBar)
-
-local content = new("Frame", {
-    Size = UDim2.new(1, -18, 1, -82), Position = UDim2.fromOffset(9, 80),
-    BackgroundTransparency = 1, ClipsDescendants = true,
-}, main)
-
-local pages, tabBtns = {}, {}
-local ORDER = { "COMBATE", "VISUAL", "MOVER", "ACAO", "MOVIM", "UI" }
-
-for i, name in ipairs(ORDER) do
-    local b = new("TextButton", {
-        Size = UDim2.fromOffset(66, 24), BackgroundColor3 = ROW, BorderSizePixel = 0,
-        Font = Enum.Font.GothamMedium, TextSize = 10, TextColor3 = DIM,
-        Text = name, AutoButtonColor = false, LayoutOrder = i,
-    }, tabBar)
-    corner(b, 6)
-    tabBtns[name] = b
-
-    local p = new("ScrollingFrame", {
-        Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-        BorderSizePixel = 0, ScrollBarThickness = 3,
-        ScrollBarImageColor3 = Color3.fromRGB(74, 62, 100),
-        CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
-        Visible = false,
-    }, content)
-    new("UIListLayout", { Padding = UDim.new(0, 6) }, p)
-    pages[name] = p
-end
-
-local function selectTab(name)
-    for n, b in pairs(tabBtns) do
-        b.BackgroundColor3 = (n == name) and ACC2 or ROW
-        b.TextColor3 = (n == name) and Color3.fromRGB(248, 245, 255) or DIM
-    end
-    for n, p in pairs(pages) do p.Visible = (n == name) end
-end
-
-for name, b in pairs(tabBtns) do
-    b.MouseButton1Click:Connect(function() selectTab(name) end)
-end
-
-local function card(page, title, accent)
-    local c = new("Frame", {
-        Size = UDim2.new(1, -8, 0, 0), BackgroundColor3 = PANEL,
-        BorderSizePixel = 0, AutomaticSize = Enum.AutomaticSize.Y,
-    }, page)
-    corner(c, 9); stroke(c, Color3.fromRGB(52, 42, 76), 1)
-    new("UIListLayout", { Padding = UDim.new(0, 5) }, c)
-    new("UIPadding", {
-        PaddingTop = UDim.new(0, 7), PaddingBottom = UDim.new(0, 7),
-        PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8),
-    }, c)
-    new("TextLabel", {
-        Size = UDim2.new(1, 0, 0, 13), BackgroundTransparency = 1,
-        Font = Enum.Font.GothamBold, TextSize = 10, TextXAlignment = Enum.TextXAlignment.Left,
-        TextColor3 = accent or ACC, Text = title,
-    }, c)
-    new("Frame", {
-        Size = UDim2.new(1, 0, 0, 1), BackgroundColor3 = Color3.fromRGB(44, 36, 64), BorderSizePixel = 0,
-    }, c)
-    local body = new("Frame", {
-        Size = UDim2.new(1, 0, 0, 0), BackgroundTransparency = 1, AutomaticSize = Enum.AutomaticSize.Y,
-    }, c)
-    new("UIListLayout", { Padding = UDim.new(0, 5) }, body)
-    return body
-end
-
-local function row(parent, h)
-    local r = new("Frame", {
-        Size = UDim2.new(1, 0, 0, h or 23), BackgroundColor3 = ROW, BorderSizePixel = 0,
-    }, parent)
-    corner(r, 6)
-    return r
-end
-
-local function toggle(parent, label, key, onChange)
-    local r = row(parent)
-    new("TextLabel", {
-        Size = UDim2.new(1, -50, 1, 0), Position = UDim2.fromOffset(8, 0),
-        BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 11.5,
-        TextColor3 = TXT, TextXAlignment = Enum.TextXAlignment.Left, Text = label,
-    }, r)
-    local sw = new("Frame", {
-        Size = UDim2.fromOffset(32, 15), Position = UDim2.new(1, -41, 0.5, -7.5),
-        BackgroundColor3 = Color3.fromRGB(48, 40, 66), BorderSizePixel = 0,
-    }, r)
-    corner(sw, 8)
-    local knob = new("Frame", {
-        Size = UDim2.fromOffset(11, 11), Position = UDim2.fromOffset(2, 2),
-        BackgroundColor3 = Color3.fromRGB(180, 172, 200), BorderSizePixel = 0,
-    }, sw)
-    corner(knob, 6)
-
-    local function paint()
-        local on = S[key]
-        sw.BackgroundColor3 = on and ACC2 or Color3.fromRGB(48, 40, 66)
-        knob.Position = on and UDim2.fromOffset(19, 2) or UDim2.fromOffset(2, 2)
-        knob.BackgroundColor3 = on and Color3.fromRGB(250, 248, 255) or Color3.fromRGB(180, 172, 200)
-    end
-
-    local btn = new("TextButton", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "" }, r)
-    btn.MouseButton1Click:Connect(function()
-        S[key] = not S[key]
-        paint()
-        if onChange then pcall(onChange, S[key]) end
-    end)
-    paint()
-    return r
-end
-
-local function slider(parent, label, key, min, max, step, fmt)
-    local holder = new("Frame", {
-        Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = ROW, BorderSizePixel = 0,
-    }, parent)
-    corner(holder, 6)
-
-    new("TextLabel", {
-        Size = UDim2.new(1, -60, 0, 15), Position = UDim2.fromOffset(8, 3),
-        BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 10.5,
-        TextColor3 = TXT, TextXAlignment = Enum.TextXAlignment.Left, Text = label,
-    }, holder)
-    local val = new("TextLabel", {
-        Size = UDim2.fromOffset(52, 15), Position = UDim2.new(1, -60, 0, 3),
-        BackgroundTransparency = 1, Font = Enum.Font.Code, TextSize = 10.5,
-        TextColor3 = ACC, TextXAlignment = Enum.TextXAlignment.Right, Text = tostring(S[key]),
-    }, holder)
-
-    local track = new("Frame", {
-        Size = UDim2.new(1, -16, 0, 4), Position = UDim2.fromOffset(8, 25),
-        BackgroundColor3 = Color3.fromRGB(46, 38, 64), BorderSizePixel = 0,
-    }, holder)
-    corner(track, 2)
-    local fill = new("Frame", {
-        Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = ACC2, BorderSizePixel = 0,
-    }, track)
-    corner(fill, 2)
-
-    local function paint()
-        fill.Size = UDim2.new(math.clamp((S[key] - min) / (max - min), 0, 1), 0, 1, 0)
-        val.Text = fmt and fmt(S[key]) or tostring(S[key])
-    end
-
-    local grabbing = false
-    local function set(input)
-        local rel = math.clamp((input.Position.X - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
-        local v = math.floor((min + rel * (max - min)) / step + 0.5) * step
-        S[key] = math.clamp(v, min, max)
-        paint()
-    end
-
-    local grab = new("TextButton", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "" }, holder)
-    grab.InputBegan:Connect(function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-            grabbing = true; set(i)
-        end
-    end)
-    conn(UIS.InputChanged, function(i)
-        if grabbing and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-            set(i)
-        end
-    end)
-    conn(UIS.InputEnded, function(i)
-        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-            grabbing = false
-        end
-    end)
-
-    paint()
-    return holder
-end
-
-local function button(parent, label, fn)
-    local b = new("TextButton", {
-        Size = UDim2.new(1, 0, 0, 24), BackgroundColor3 = ACC2,
-        BorderSizePixel = 0, Font = Enum.Font.GothamBold, TextSize = 10.5,
-        TextColor3 = Color3.fromRGB(248, 245, 255), Text = label, AutoButtonColor = false,
-    }, parent)
-    corner(b, 6)
-    b.MouseEnter:Connect(function() tween(b, { BackgroundColor3 = ACC }) end)
-    b.MouseLeave:Connect(function() tween(b, { BackgroundColor3 = ACC2 }) end)
-    b.MouseButton1Click:Connect(function() pcall(fn) end)
-    return b
-end
-
-local function info(parent, text)
-    return new("TextLabel", {
-        Size = UDim2.new(1, 0, 0, 14), BackgroundTransparency = 1,
-        Font = Enum.Font.Code, TextSize = 9.5, TextColor3 = DIM,
-        TextXAlignment = Enum.TextXAlignment.Left, Text = text, TextWrapped = true,
-    }, parent)
-end
-
-local function modeRow(parent, label, key, opts)
-    local r = row(parent, 26)
-    new("TextLabel", {
-        Size = UDim2.new(1, -110, 1, 0), Position = UDim2.fromOffset(8, 0),
-        BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 10.5,
-        TextColor3 = TXT, TextXAlignment = Enum.TextXAlignment.Left, Text = label,
-    }, r)
-    local btns = {}
-    local function paint()
-        for v, b in pairs(btns) do
-            b.BackgroundColor3 = (S[key] == v) and ACC2 or Color3.fromRGB(44, 36, 62)
-            b.TextColor3 = (S[key] == v) and Color3.fromRGB(250, 248, 255) or DIM
-        end
-    end
-    for i, v in ipairs(opts) do
-        local b = new("TextButton", {
-            Size = UDim2.fromOffset(48, 18), Position = UDim2.new(1, -52 * (3 - i) - 2, 0.5, -9),
-            BackgroundColor3 = Color3.fromRGB(44, 36, 62), BorderSizePixel = 0,
-            Font = Enum.Font.GothamMedium, TextSize = 9, TextColor3 = DIM,
-            Text = v, AutoButtonColor = false,
-        }, r)
-        corner(b, 4)
-        btns[v] = b
-        b.MouseButton1Click:Connect(function()
-            S[key] = v
-            paint()
-            if key == "hitMode" and v == "HOOK" then restoreSizes() end
-        end)
-    end
-    paint()
-    return r
-end
-
--- ============================================================
--- HUD
--- ============================================================
-local hud = new("Frame", {
-    Size = UDim2.fromOffset(172, 112), Position = UDim2.new(0, 40, 0, 434),
-    BackgroundColor3 = Color3.fromRGB(10, 8, 16), BorderSizePixel = 0,
-    BackgroundTransparency = 0.15,
-}, gui)
-corner(hud, 10); stroke(hud, Color3.fromRGB(58, 46, 84), 1)
-new("Frame", { Size = UDim2.new(1, 0, 0, 2), BackgroundColor3 = ACC2, BorderSizePixel = 0 }, hud)
-new("TextLabel", {
-    Size = UDim2.new(1, -12, 0, 13), Position = UDim2.fromOffset(8, 4),
-    BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 8.5,
-    TextColor3 = DIM, TextXAlignment = Enum.TextXAlignment.Left, Text = "INDICADORES",
-}, hud)
-
-local function hudRow(y, label)
-    new("TextLabel", {
-        Size = UDim2.fromOffset(68, 12), Position = UDim2.fromOffset(8, y),
-        BackgroundTransparency = 1, Font = Enum.Font.Code, TextSize = 9.5,
-        TextColor3 = DIM, TextXAlignment = Enum.TextXAlignment.Left, Text = label,
-    }, hud)
-    return new("TextLabel", {
-        Size = UDim2.fromOffset(76, 12), Position = UDim2.fromOffset(78, y),
-        BackgroundTransparency = 1, Font = Enum.Font.Code, TextSize = 9.5,
-        TextColor3 = TXT, TextXAlignment = Enum.TextXAlignment.Right, Text = "--",
-    }, hud)
-end
-
-local hDist  = hudRow(20, "distancia")
-local hSpeed = hudRow(33, "velocidade")
-local hAlt   = hudRow(46, "altura")
-local hFps   = hudRow(59, "fps")
-
-local chipRow = new("Frame", {
-    Size = UDim2.new(1, -12, 0, 16), Position = UDim2.fromOffset(8, 78),
-    BackgroundTransparency = 1,
-}, hud)
-new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4) }, chipRow)
-
-local function chip(label)
-    local f = new("Frame", {
-        Size = UDim2.fromOffset(0, 16), BackgroundColor3 = Color3.fromRGB(30, 25, 44),
-        BorderSizePixel = 0, AutomaticSize = Enum.AutomaticSize.X,
-    }, chipRow)
-    corner(f, 4)
-    new("UIPadding", { PaddingLeft = UDim.new(0, 5), PaddingRight = UDim.new(0, 5) }, f)
-    local l = new("TextLabel", {
-        Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
-        Font = Enum.Font.GothamMedium, TextSize = 9, TextColor3 = Color3.fromRGB(96, 88, 118), Text = label,
-    }, f)
-    return f, l
-end
-
-local cAimF, cAimL = chip("AIM")
-local cHitF, cHitL = chip("HIT")
-local cSpkF, cSpkL = chip("SPK")
-local cLckF, cLckL = chip("LOCK")
-
-local function paintChip(f, l, on)
-    f.BackgroundColor3 = on and Color3.fromRGB(52, 38, 84) or Color3.fromRGB(30, 25, 44)
-    l.TextColor3 = on and ACC or Color3.fromRGB(96, 88, 118)
-end
-
-local hDrag, hStart, hPos
-conn(hud.InputBegan, function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-        hDrag = true; hStart = i.Position; hPos = hud.Position
-    end
-end)
-conn(UIS.InputChanged, function(i)
-    if hDrag and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-        local d = i.Position - hStart
-        hud.Position = UDim2.new(hPos.X.Scale, hPos.X.Offset + d.X, hPos.Y.Scale, hPos.Y.Offset + d.Y)
-    end
-end)
-conn(UIS.InputEnded, function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-        hDrag = false
-    end
-end)
-
--- toasts
-local toasts = new("Frame", {
-    Size = UDim2.fromOffset(210, 190), Position = UDim2.new(0, 40, 1, -210),
-    BackgroundTransparency = 1,
-}, gui)
-new("UIListLayout", {
-    VerticalAlignment = Enum.VerticalAlignment.Bottom, Padding = UDim.new(0, 4),
-}, toasts)
-
-local function notify(text, col)
-    local f = new("Frame", {
-        Size = UDim2.new(1, 0, 0, 22), BackgroundColor3 = Color3.fromRGB(22, 18, 33),
-        BorderSizePixel = 0,
-    }, toasts)
-    corner(f, 6); stroke(f, col or ACC, 1)
-    new("Frame", { Size = UDim2.fromOffset(2, 22), BackgroundColor3 = col or ACC, BorderSizePixel = 0 }, f)
-    new("TextLabel", {
-        Size = UDim2.new(1, -14, 1, 0), Position = UDim2.fromOffset(9, 0),
-        BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 10.5,
-        TextColor3 = TXT, TextXAlignment = Enum.TextXAlignment.Left, Text = text,
-    }, f)
-    task.delay(2.1, function()
-        pcall(function() tween(f, { BackgroundTransparency = 1 }, 0.25) end)
-        task.delay(0.3, function() pcall(function() f:Destroy() end) end)
-    end)
-end
-
--- ============================================================
--- PÁGINAS
--- ============================================================
-local pg = pages.COMBATE
-local c1 = card(pg, "ATAQUE")
-toggle(c1, "AUTO SPIKE", "autoSpike")
-slider(c1, "distância", "spikeDist", 6, 45, 1)
-toggle(c1, "AUTO BUMP", "autoBump")
-slider(c1, "distância (bump)", "bumpDist", 4, 30, 1)
-
-local c2 = card(pg, "HITBOX")
-toggle(c2, "HITBOX", "hitbox", function(v)
-    if not v then stopHitbox() end
-    notify(v and "hitbox ON" or "hitbox OFF", v and GOOD or DIM)
-end)
-slider(c2, "multiplicador", "hitboxSize", 1, 6, 0.1, function(v) return string.format("%.1fx", v) end)
-modeRow(c2, "modo", "hitMode", { "HOOK", "TAMANHO" })
-toggle(c2, "CONTORNO NA BOLA", "hitShow", function(v)
-    if not v then clearMark() end
-end)
-
-local c3 = card(pg, "MIRA")
-toggle(c3, "AIM ASSIST", "aim")
-toggle(c3, "MARCAR ALVO", "aimLock")
-slider(c3, "campo", "aimFov", 40, 420, 5)
-slider(c3, "suavidade", "aimSmooth", 0.05, 1, 0.05, function(v) return string.format("%.2f", v) end)
-
-local c4 = card(pg, "SUPER SPIKE", WARN)
-toggle(c4, "SUPER SPIKE", "superSpike")
-slider(c4, "força", "ssPower", 20, 140, 2)
-button(c4, "EXECUTAR", function() superSpike(); notify("super spike", WARN) end)
-button(c4, "ATACAR AGORA", doAttack)
-
-local v1 = card(pages.VISUAL, "ESP")
-toggle(v1, "ESP", "esp", function(v) notify(v and "esp ON" or "esp OFF", v and GOOD or DIM) end)
-toggle(v1, "CAIXA", "espBox")
-toggle(v1, "PREENCHIMENTO", "espFill")
-toggle(v1, "VIDA", "espHp")
-toggle(v1, "NOME", "espName")
-toggle(v1, "DISTANCIA", "espDist")
-toggle(v1, "BOLA", "espBall")
-
-local v2 = card(pages.VISUAL, "HUD")
-toggle(v2, "MOSTRAR HUD", "hud", function(v) hud.Visible = v end)
-
-local m1 = card(pages.MOVER, "REMOTES")
-toggle(m1, "SERVE REMOTO", "remoteServe")
-toggle(m1, "SPIKE REMOTO", "remoteSpike")
-toggle(m1, "INF", "remoteInf")
-button(m1, "DISPARAR SPIKE", function() fireRemote("spike", S.lastSpike) end)
-button(m1, "DISPARAR SERVE", function() fireRemote("serve", S.lastServe) end)
-
-local a1 = card(pages.ACAO, "AUTO HABILIDADE")
-toggle(a1, "AUTO HABILIDADE", "autoAbility")
-slider(a1, "intervalo", "abilityDelay", 0.3, 5, 0.1, function(v) return string.format("%.1fs", v) end)
-
-local a2 = card(pages.ACAO, "TILT")
-toggle(a2, "TILT", "tilt")
-slider(a2, "angulo", "tiltAngle", -30, 30, 1)
-
-local mv = card(pages.MOVIM, "MOVIMENTO")
-slider(mv, "WALKSPEED", "walkspeed", 16, 120, 1)
-slider(mv, "JUMPPOWER", "jumppower", 30, 200, 1)
-toggle(mv, "AUTO ROTATE", "autorot")
-button(mv, "APLICAR", applyLive)
-
--- UI / binds / diagnóstico
-local u1 = card(pages.UI, "BINDS")
-local function bindRow(label, key, col)
-    local r = row(u1)
-    new("TextLabel", {
-        Size = UDim2.new(1, -100, 1, 0), Position = UDim2.fromOffset(8, 0),
-        BackgroundTransparency = 1, Font = Enum.Font.GothamMedium, TextSize = 11,
-        TextColor3 = TXT, TextXAlignment = Enum.TextXAlignment.Left, Text = label,
-    }, r)
-    local b = new("TextButton", {
-        Size = UDim2.fromOffset(74, 17), Position = UDim2.new(1, -82, 0.5, -8.5),
-        BackgroundColor3 = Color3.fromRGB(40, 33, 58), BorderSizePixel = 0,
-        Font = Enum.Font.Code, TextSize = 9.5, TextColor3 = col,
-        Text = S[key].Name, AutoButtonColor = false,
-    }, r)
-    corner(b, 4)
-    return b
-end
-
-local keyBtn = bindRow("tecla da UI", "uiKey", ACC)
-local panicBtn = bindRow("panico", "panicKey", WARN)
-
-local listening, listeningPanic = false, false
-keyBtn.MouseButton1Click:Connect(function() listening = true; keyBtn.Text = "..." end)
-panicBtn.MouseButton1Click:Connect(function() listeningPanic = true; panicBtn.Text = "..." end)
-
-local u2 = card(pages.UI, "DIAGNOSTICO")
-local dgExec = info(u2, "executor: --")
-local dgHook = info(u2, "hook: --")
-local dgBall = info(u2, "bola: --")
-local dgEsp  = info(u2, "esp: --")
-
-conn(UIS.InputBegan, function(i, gpe)
-    if gpe then return end
-    if listening then
-        listening = false; S.uiKey = i.KeyCode; keyBtn.Text = i.KeyCode.Name; return
-    end
-    if listeningPanic then
-        listeningPanic = false; S.panicKey = i.KeyCode; panicBtn.Text = i.KeyCode.Name; return
-    end
-    if i.KeyCode == S.uiKey then
-        S.open = not S.open; main.Visible = S.open
-    elseif i.KeyCode == S.panicKey then
-        pcall(genv.__KNX)
-    end
-end)
-
-local u3 = card(pages.UI, "CONFIG")
-local CFG = {
-    "autoSpike","spikeDist","autoBump","bumpDist","hitbox","hitboxSize","hitMode","hitShow",
-    "aim","aimLock","aimFov","aimSmooth","superSpike","ssPower",
-    "esp","espBox","espFill","espHp","espName","espDist","espBall","hud",
-    "remoteServe","remoteSpike","remoteInf","autoAbility","abilityDelay",
-    "tilt","tiltAngle","walkspeed","jumppower","autorot",
-}
-
-button(u3, "SALVAR", function()
-    if not writefile then notify("sem writefile", WARN); return end
-    local out = {}
-    for _, k in ipairs(CFG) do out[k] = S[k] end
-    writefile("kennex_v45.json", HS:JSONEncode(out))
-    notify("salvo", GOOD)
-end)
-
-button(u3, "CARREGAR", function()
-    if not (readfile and isfile and isfile("kennex_v45.json")) then notify("nada salvo", WARN); return end
-    local d = HS:JSONDecode(readfile("kennex_v45.json"))
-    for k, v in pairs(d) do
-        if S[k] ~= nil and type(v) == type(S[k]) then S[k] = v end
-    end
-    notify("carregado", GOOD)
-end)
-
-selectTab("COMBATE")
-
--- ============================================================
--- MOVIM
--- ============================================================
-function applyLive()
-    local hum = getHum()
+local function doJump()
+    local now = os.clock()
+    if now - S.jumpT < CFG.jumpCd then return end
+    local ch = LP.Character
+    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
     if not hum then return end
-    pcall(function()
-        hum.WalkSpeed = S.walkspeed
-        hum.JumpPower = S.jumppower
-        hum.UseJumpPower = true
-        hum.AutoRotate = S.autorot
-    end)
+    local st = hum:GetState()
+    if st == Enum.HumanoidStateType.Jumping or st == Enum.HumanoidStateType.Freefall then return end
+    if st == Enum.HumanoidStateType.Seated or st == Enum.HumanoidStateType.Dead then return end
+    S.jumpT = now
+    if State.superSpike then
+        safe(function() VIM:SendKeyEvent(true, Enum.KeyCode.Space, false, game) end)
+        task.delay(0.07, function()
+            safe(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
+        end)
+    else
+        safe(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+    end
 end
 
-conn(LP.CharacterAdded, function()
-    task.wait(1)
-    applyLive()
-end)
-
-task.spawn(function()
-    while S.alive do
-        applyLive()
-        task.wait(0.7)
+--// ===================== CORRIDA =====================
+local function startRun(hum)
+    if S.runOn then return end
+    S.runOn = true
+    S.runStart = os.clock()
+    S.runEnd = S.runStart + State.runTime + 2.5
+    S.runJumped = false
+    if hum then
+        S.runWs = hum.WalkSpeed
+        if State.runSpeed > 0 then safe(function() hum.WalkSpeed = State.runSpeed end) end
     end
-end)
+    if UIS:IsKeyDown(Enum.KeyCode.W) then
+        S.runKey = false
+    else
+        S.runKey = true
+        safe(function() VIM:SendKeyEvent(true, Enum.KeyCode.W, false, game) end)
+    end
+end
 
--- ============================================================
--- LOOPS
--- ============================================================
-conn(RS.Heartbeat, function()
-    if not S.alive or tick() - S.lastAtk < 0.35 then return end
-    local ball, root = getBall(), getRoot()
-    if not ball or not root then return end
-    local rel = ball.Position - root.Position
-    local d = rel.Magnitude
-    if S.autoSpike and d <= S.spikeDist and rel.Y > -1 then doAttack(); return end
-    if S.autoBump and d <= S.bumpDist and rel.Y <= 1 then doAttack() end
-end)
-
-task.spawn(function()
-    while S.alive do
-        if S.autoAbility then
-            pcall(function()
-                VIM:SendKeyEvent(true, S.abilityKey, false, game)
-                task.wait(0.05)
-                VIM:SendKeyEvent(false, S.abilityKey, false, game)
-            end)
-            task.wait(S.abilityDelay)
-        else
-            task.wait(0.1)
+stopRun = function(hum)
+    if not S.runOn then
+        if S.runKey then
+            S.runKey = false
+            safe(function() VIM:SendKeyEvent(false, Enum.KeyCode.W, false, game) end)
+        end
+        return
+    end
+    S.runOn = false
+    S.runJumped = false
+    S.runDone = os.clock()
+    if S.runKey then
+        S.runKey = false
+        if not UIS:IsKeyDown(Enum.KeyCode.W) then
+            safe(function() VIM:SendKeyEvent(false, Enum.KeyCode.W, false, game) end)
         end
     end
-end)
-
-local frames, fpsAt = 0, tick()
-conn(RS.RenderStepped, function() frames += 1 end)
-
-task.spawn(function()
-    while S.alive do
-        pcall(function()
-            if tick() - fpsAt >= 1 then S.fps = frames; frames = 0; fpsAt = tick() end
-        end)
-        task.wait(0.25)
+    if hum and S.runWs then
+        safe(function() hum.WalkSpeed = S.runWs end)
+        S.runWs = nil
     end
-end)
-
--- HUD + hitbox tamanho + diagnóstico
-task.spawn(function()
-    while S.alive do
-        pcall(function()
-            local ball, root = getBall(), getRoot()
-            if ball and root then
-                local d = (ball.Position - root.Position).Magnitude
-                hDist.Text = string.format("%.1fm", d)
-                hDist.TextColor3 = d <= S.spikeDist and GOOD or TXT
-                hSpeed.Text = string.format("%.0f", ball.AssemblyLinearVelocity.Magnitude)
-                hAlt.Text = string.format("%.1f", ball.Position.Y)
-            else
-                hDist.Text = "--"; hSpeed.Text = "--"; hAlt.Text = "--"
-            end
-            hFps.Text = tostring(S.fps)
-            hFps.TextColor3 = S.fps >= 45 and GOOD or WARN
-
-            paintChip(cAimF, cAimL, S.aim)
-            paintChip(cHitF, cHitL, S.hitbox)
-            paintChip(cSpkF, cSpkL, S.autoSpike)
-            paintChip(cLckF, cLckL, S.aim and S.aimLock)
-
-            hud.Visible = S.hud
-
-            if S.hitbox and S.hitMode == "TAMANHO" then applySizeMode()
-            elseif not S.hitbox then restoreSizes() end
-
-            if S.hitbox and S.hitShow then markBall(ball) else if not S.hitbox then clearMark() end end
-
-            dgExec.Text = "executor: " .. ((getrawmetatable and "raw-mt ok") or "raw-mt ausente")
-            dgExec.TextColor3 = getrawmetatable and GOOD or WARN
-            dgHook.Text = "hook: " .. (hooked and "ativo" or "inativo")
-            dgHook.TextColor3 = hooked and GOOD or WARN
-            dgBall.Text = "bola: " .. (ball and "ok" or "nao achada")
-            dgBall.TextColor3 = ball and GOOD or WARN
-            dgEsp.Text = "esp: " .. (S.esp and (#Players:GetPlayers() - 1) .. " alvos" or "off")
-            dgEsp.TextColor3 = S.esp and GOOD or DIM
-        end)
-        task.wait(0.2)
-    end
-end)
-
-conn(RS.RenderStepped, function()
-    if not S.alive then return end
-    pcall(applyAim)
-    if S.tilt then cam.CFrame = cam.CFrame * CFrame.Angles(0, 0, math.rad(S.tiltAngle)) end
-    pcall(syncESP)
-    pcall(syncBallESP)
-end)
-
-conn(Players.PlayerRemoving, function(p) killESP(p) end)
-
--- ============================================================
--- CLEANUP
--- ============================================================
-genv.__KNX = function()
-    G.alive = false
-    for _, c in ipairs(G.conns) do pcall(function() c:Disconnect() end) end
-    for _, i in ipairs(G.insts) do pcall(function() i:Destroy() end) end
-    for plr in pairs(espSet) do killESP(plr) end
-    pcall(stopHitbox)
-    if ballMark then pcall(function() ballMark:Destroy() end) end
-    pcall(unhook)
-    pcall(function() if gui then gui:Destroy() end end)
-    genv.__KNX = nil
 end
 
-installHook()
-notify("kennex v45 carregado", GOOD)
-print("[KENNEX v45] ok · hook:", hooked)
+local function ballExcl(b, list)
+    if not b then return list end
+    if b:IsA("BasePart") then
+        list[#list + 1] = b
+    else
+        for _, d in ipairs(b:GetDescendants()) do
+            if d:IsA("BasePart") then list[#list + 1] = d end
+        end
+    end
+    return list
+end
+
+local function landPoint(pos, vel, ball)
+    local g = workspace.Gravity
+    if g <= 0 then return nil end
+    local rp = RaycastParams.new()
+    rp.FilterType = Enum.RaycastFilterType.Exclude
+    local f = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Character then f[#f + 1] = p.Character end
+    end
+    if S.box then f[#f + 1] = S.box end
+    ballExcl(ball, f)
+    rp.FilterDescendantsInstances = f
+    local fh = workspace:Raycast(pos, Vector3.new(0, -400, 0), rp)
+    if not fh then return nil end
+    local gy = fh.Position.Y
+    local c0 = pos.Y - gy
+    if c0 <= 0.05 then return nil end
+    local a, vy = -0.5 * g, vel.Y
+    local disc = vy * vy - 4 * a * c0
+    if disc < 0 then return nil end
+    local sq = math.sqrt(disc)
+    local t = math.max((-vy + sq) / (2 * a), (-vy - sq) / (2 * a))
+    if t <= 0.02 or t > 6 then return nil end
+    local h = pos + Vector3.new(vel.X, 0, vel.Z) * t
+    if (h - pos).Magnitude < 0.4 then return nil end
+    return Vector3.new(h.X, gy + 0.4, h.Z), t
+end
+
+--// ===================== ESP =====================
+local espObj = {}
+local function espFor(pl)
+    if not espObj[pl] then
+        espObj[pl] = { txt = makeText(D3.solo, 10), hp = makeText(D3.solo, 9), line = makeLine(D3.solo) }
+    end
+    return espObj[pl]
+end
+bind(Players.PlayerRemoving:Connect(function(pl)
+    local e = espObj[pl]
+    if e then
+        pcall(function() e.txt.rm() end); pcall(function() e.hp.rm() end); pcall(function() e.line.rm() end)
+        espObj[pl] = nil
+    end
+end))
+bind(LP.CharacterAdded:Connect(function()
+    safe(clearPins)
+    S.meterList = {}
+    S.meterT = 0
+    RFR = nil
+    if State.pinMeter then task.delay(1.5, function() if State.pinMeter then safe(buildPins) end end) end
+    task.delay(1.2, function() safe(applyPow) end)
+end))
+local function colorOf(pl)
+    if pl.Team and LP.Team then
+        return pl.Team == LP.Team and D3.mate or D3.enemy
+    end
+    return D3.solo
+end
+local function hideEsp(e)
+    if not e then return end
+    pcall(e.txt.hide); pcall(e.hp.hide); pcall(e.line.hide)
+end
+
+--// ===================== FOV =====================
+local fovCircle, fovTxt
+
+local function fovPixel(c, vs)
+    local a = math.rad(math.min(State.aimFov, 88))
+    return math.tan(a) * (vs.Y * 0.5) / math.tan(math.rad(c.FieldOfView * 0.5))
+end
+
+rebuildDraw = function()
+    for _, list in pairs(pool) do
+        for _, o in ipairs(list) do pcall(function() o.rm() end) end
+        for i = #list, 1, -1 do list[i] = nil end
+    end
+    for pl, e in pairs(espObj) do
+        pcall(function() e.txt.rm() end); pcall(function() e.hp.rm() end); pcall(function() e.line.rm() end)
+        espObj[pl] = nil
+    end
+    if fovCircle then pcall(function() fovCircle.rm() end) end
+    if fovTxt then pcall(function() fovTxt.rm() end) end
+    fovCircle = makeCircle(D3.fov, 1.2, 0.55)
+    fovTxt = makeText(D3.fov, 9)
+end
+
+local function stepAim(dt)
+    local c = cam()
+    if not c then return end
+    local b = S.ball
+    local root = b and ballRoot(b)
+    local show = State.fovRing and State.aim and root ~= nil
+    if not show then
+        pcall(fovCircle.hide)
+        pcall(fovTxt.hide)
+    end
+    if State.camFov > 0 then
+        if not S.camActive then S.camActive = true; S.camBase = c.FieldOfView end
+        local a = 1 - math.exp(-10 * dt)
+        c.FieldOfView = c.FieldOfView + (State.camFov - c.FieldOfView) * a
+    elseif S.camActive then
+        local base = S.camBase or 70
+        c.FieldOfView = c.FieldOfView + (base - c.FieldOfView) * (1 - math.exp(-10 * dt))
+        if math.abs(c.FieldOfView - base) < 0.2 then S.camActive = false end
+    end
+    if not root then return end
+    local vs = c.ViewportSize
+    if show then
+        local r = math.clamp(fovPixel(c, vs), 20, vs.Y)
+        fovCircle.set(vs.X * 0.5, vs.Y * 0.5, r, D3.fov, true)
+        fovTxt.set(vs.X * 0.5, vs.Y * 0.5 - r - 13, ("%.0f°"):format(State.aimFov), D3.fov, true)
+    end
+    if not State.aim then return end
+    if os.clock() < S.tiltHold then return end
+    local to = root.Position - c.CFrame.Position
+    local dist = to.Magnitude
+    if dist < 0.4 then return end
+    local ang = math.deg(math.acos(math.clamp(c.CFrame.LookVector:Dot(to.Unit), -1, 1)))
+    if dist <= State.aimRange and ang <= State.aimFov then
+        local want = CFrame.new(c.CFrame.Position, root.Position)
+        local a = 1 - math.exp(-State.aimSpeed * dt)
+        if ang < 1.2 then a = a * 0.45 end
+        c.CFrame = c.CFrame:Lerp(want, math.clamp(a, 0, 1))
+    end
+end
+
+--// ===================== LOOP =====================
+local function stepDraw(dt)
+    if not S.alive then return end
+    local c = cam()
+    local r = myRoot()
+    if not c or not r then return end
+    local vs = c.ViewportSize
+
+    releaseAll(pool.ring) releaseAll(pool.dot) releaseAll(pool.tracer)
+    releaseAll(pool.land) releaseAll(pool.traj)
+
+    if os.clock() - S.hbT > 0.8 then
+        S.hbT = os.clock()
+        safe(cacheBase)
+        safe(applyTpl)
+    end
+    safe(applyLive)
+
+    if State.alwaysPower and os.clock() - S.powT > 0.15 then
+        S.powT = os.clock()
+        safe(applyPow)
+    end
+
+    if State.pinMeter then
+        if os.clock() - S.pinT > 0.2 then
+            S.pinT = os.clock()
+            if #S.pins == 0 then safe(buildPins) end
+            for _, p in ipairs(S.pins) do pinValue(p) end
+        end
+    elseif #S.pins > 0 then
+        safe(clearPins)
+    end
+
+    if State.autoAbility then safe(pressAbility) end
+
+    local ch = LP.Character
+    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+    if hum then
+        if State.wsOn then
+            if not S.wsBase then S.wsBase = hum.WalkSpeed end
+            if math.abs(hum.WalkSpeed - State.ws) > 0.1 then hum.WalkSpeed = State.ws end
+        elseif S.wsBase then
+            if math.abs(hum.WalkSpeed - S.wsBase) > 0.1 then hum.WalkSpeed = S.wsBase end
+            S.wsBase = nil
+        end
+        if State.jpOn then
+            if not S.jpBase then
+                S.jpBase = hum.UseJumpPower and hum.JumpPower or hum.JumpHeight
+            end
+            if hum.UseJumpPower then
+                if math.abs(hum.JumpPower - State.jp) > 0.1 then hum.JumpPower = State.jp end
+            else
+                local v = State.jp / 5
+                if math.abs(hum.JumpHeight - v) > 0.1 then hum.JumpHeight = v end
+            end
+        elseif S.jpBase then
+            if hum.UseJumpPower then hum.JumpPower = S.jpBase else hum.JumpHeight = S.jpBase end
+            S.jpBase = nil
+        end
+        local st = hum:GetState()
+        local air = st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping
+        if State.autoRot then
+            if S.rotBase == nil then S.rotBase = hum.AutoRotate end
+            if air and not hum.AutoRotate then hum.AutoRotate = true end
+        elseif S.rotBase ~= nil then
+            if hum.AutoRotate ~= S.rotBase then hum.AutoRotate = S.rotBase end
+            S.rotBase = nil
+        end
+    end
+
+    if State.gravOn then
+        local g = S.gravBase * (State.gravPct / 100)
+        if math.abs(workspace.Gravity - g) > 0.1 then workspace.Gravity = g end
+    elseif math.abs(workspace.Gravity - S.gravBase) > 0.1 then
+        workspace.Gravity = S.gravBase
+    end
+
+    if os.clock() - S.scanT > CFG.scan then
+        S.scanT = os.clock()
+        scan()
+        if S.forced then
+            local fr = ballRoot(S.forced)
+            if not S.forced.Parent or not fr
+                or (fr.Position - r.Position).Magnitude > 250 then
+                S.forced = nil
+            end
+        end
+        if not S.forced then setBall(pickBall()) end
+    end
+
+    local ball = S.ball
+    if ball and (not ball.Parent or not ballRoot(ball)) then
+        S.balls[ball] = nil
+        S.tier[ball] = nil
+        S.baseRad[ball] = nil
+        setBall(nil)
+        ball = nil
+    end
+    if UI.dot then UI.dot.BackgroundColor3 = ball and C.green or C.red end
+
+    if ball then
+        safe(function()
+            local root = ballRoot(ball)
+            if not root then return end
+            applyBox(ball, root)
+            if S.prev then
+                local raw = (root.Position - S.prev) / math.max(dt, 1 / 240)
+                if raw.Magnitude > 800 then raw = raw.Unit * 800 end
+                S.vel = S.vel:Lerp(raw, 1 - math.exp(-22 * dt))
+                if S.vel.Magnitude < 0.6 then S.vel = Vector3.zero end
+            end
+            S.prev = root.Position
+
+            local rad = ballRadius(ball)
+            local dist = (root.Position - r.Position).Magnitude
+            local trig = rad + charRad() + CFG.pad
+            local fut = dist
+            if S.vel.Magnitude > 3 then
+                fut = ((root.Position + S.vel * CFG.lead) - r.Position).Magnitude
+            end
+            local inside = fut <= trig
+
+            local pos, on = c:WorldToViewportPoint(root.Position)
+            local visible = on and pos.Z > 0
+                and pos.X > -80 and pos.X < vs.X + 80 and pos.Y > -80 and pos.Y < vs.Y + 80
+
+            if State.ring and visible then
+                local edge = c:WorldToViewportPoint(root.Position + c.CFrame.RightVector * rad)
+                local pr = math.abs(edge.X - pos.X)
+                if pr == pr and pr > 0 and pr < 900 then
+                    local col = inside and D3.green or D3.ring
+                    grab(pool.ring, function() return makeCircle(col, 1.5, 0.1) end).set(
+                        pos.X, pos.Y, math.max(pr, 9), col, true)
+                    grab(pool.dot, function() return makeCircle(col, 1, 0, true) end).set(
+                        pos.X, pos.Y, 2.5, col, true)
+                    grab(pool.land, makeText, D3.ring).set(pos.X,
+                        pos.Y + math.max(pr, 16) + 4, ("%.1f"):format(dist), col, true)
+                end
+            end
+
+            if State.tracer and visible then
+                grab(pool.tracer, makeLine, D3.tracer).set(
+                    Vector2.new(vs.X * 0.5, vs.Y - 4), Vector2.new(pos.X, pos.Y), D3.tracer, true)
+            end
+
+            local lp, ltime
+            if S.vel.Magnitude > 6 then
+                lp, ltime = landPoint(root.Position, S.vel, ball)
+            end
+
+            if State.traj and lp and ltime and ltime > 0.05 then
+                local p, v, g = root.Position, S.vel, workspace.Gravity
+                for i = 1, 12 do
+                    local t = ltime * (i / 12)
+                    local sp = p + v * t + Vector3.new(0, -0.5 * g * t * t, 0)
+                    local sps, son = c:WorldToViewportPoint(sp)
+                    if son and sps.Z > 0 then
+                        grab(pool.traj, function() return makeCircle(D3.traj, 1, 0, true) end).set(
+                            sps.X, sps.Y, 2, D3.traj, true)
+                    end
+                end
+            end
+
+            if lp and ltime and State.traj then
+                local lpos, lon = c:WorldToViewportPoint(lp)
+                if lon and lpos.Z > 0 then
+                    local edge = c:WorldToViewportPoint(lp + c.CFrame.RightVector * 3)
+                    local pr = math.clamp(math.abs(edge.X - lpos.X), 6, 300)
+                    grab(pool.land, makeCircle, D3.land).set(lpos.X, lpos.Y, pr, D3.land, true)
+                    grab(pool.land, makeText, D3.land).set(lpos.X, lpos.Y - pr - 12,
+                        ("%.1fs"):format(ltime), D3.land, true)
+                end
+            end
+
+            local nearLand = lp and ltime and ltime < 0.9
+                and (lp - r.Position).Magnitude <= State.reach
+            local high = (root.Position.Y - r.Position.Y) >= State.spikeH and dist <= State.spikeR
+
+            if State.jump and (high or (nearLand and S.vel.Y > 2)) then doJump() end
+            if State.autoRecv and nearLand then doAttack() end
+            if State.autoSpike and high and not S.runOn then doSpike() end
+
+            if State.superSpike then
+                local above = root.Position.Y - r.Position.Y
+                local incoming = dist <= State.runDist and above >= 1.5
+                if not S.runOn and incoming and os.clock() - S.runDone > 0.4 then
+                    startRun(hum)
+                end
+                if S.runOn then
+                    if dist < 2.4 and not S.runJumped then
+                        S.runStart = math.min(S.runStart, os.clock() - State.runTime)
+                    end
+                    if not S.runJumped and os.clock() - S.runStart >= State.runTime then
+                        S.runJumped = true
+                        doJump()
+                        task.delay(0.12, function() doSpike() end)
+                    end
+                    if S.runJumped and os.clock() - S.runStart > State.runTime + 0.6 then
+                        stopRun(hum)
+                    elseif os.clock() > S.runEnd then
+                        stopRun(hum)
+                    end
+                end
+            elseif S.runOn then
+                stopRun(hum)
+            end
+        end)
+    elseif S.runOn then
+        stopRun(hum)
+    end
+
+    if State.esp then
+        local drawn = 0
+        for _, pl in ipairs(Players:GetPlayers()) do
+            if drawn < 12 and pl ~= LP and pl.Character then
+                local hrp = pl.Character:FindFirstChild("HumanoidRootPart")
+                local h2 = pl.Character:FindFirstChildOfClass("Humanoid")
+                local mate = pl.Team and LP.Team and pl.Team == LP.Team
+                if hrp and h2 and h2.Health > 0 and not (mate and State.hideMate) then
+                    local d = (hrp.Position - r.Position).Magnitude
+                    if d < 220 then
+                        local pos, on = c:WorldToViewportPoint(hrp.Position + Vector3.new(0, 3, 0))
+                        local e = espFor(pl)
+                        local col = colorOf(pl)
+                        if on and pos.Z > 0 then
+                            drawn += 1
+                            e.txt.set(pos.X, pos.Y - 12, ("%s · %d"):format(pl.Name, math.floor(d)), col, true)
+                            if State.hp then
+                                e.hp.set(pos.X, pos.Y - 24,
+                                    ("%d"):format(math.floor(h2.Health / h2.MaxHealth * 100)), col, true)
+                            else
+                                pcall(e.hp.hide)
+                            end
+                            e.line.set(Vector2.new(vs.X * 0.5, vs.Y - 4),
+                                Vector2.new(pos.X, pos.Y), col, true)
+                        else
+                            hideEsp(e)
+                        end
+                    else
+                        hideEsp(espObj[pl])
+                    end
+                else
+                    hideEsp(espObj[pl])
+                end
+            end
+        end
+    else
+        for _, e in pairs(espObj) do hideEsp(e) end
+    end
+
+    if os.clock() - S.uiT > 0.25 and UI.stLbl then
+        S.uiT = os.clock()
+        if UI.rfNote then
+            if S.lastWire and os.clock() - S.lastWireT < 6 then
+                UI.rfNote.Text = "capturado: " .. S.lastWire
+                UI.rfNote.TextColor3 = C.green
+            else
+                UI.rfNote.Text = State.wireMult and ("hook ativo · " .. State.wirePow .. "x") or "hook desligado"
+                UI.rfNote.TextColor3 = State.wireMult and C.dim or C.amber
+            end
+        end
+        if UI.runNote then
+            UI.runNote.Text = ("%.0fst / %.2fs a %d · casados: %s"):format(
+                State.runDist, State.runTime, State.runSpeed,
+                (State.runDist >= State.runTime * State.runSpeed * 0.7) and "sim" or "aumente a distancia")
+        end
+        if UI.meterNote then
+            if #S.pins > 0 then
+                local p = S.pins[1]
+                UI.meterNote.Text = "alvo: " .. (p.key or (p.obj and p.obj.Name) or "?")
+                UI.meterNote.TextColor3 = C.green
+            else
+                UI.meterNote.Text = State.pinMeter and "alvo: procurando" or "alvo: desligado"
+                UI.meterNote.TextColor3 = C.dim
+            end
+        end
+        if UI.abilNote then
+            UI.abilNote.Text = S.abilBtn and ("botao: " .. S.abilBtn.Name) or "sem botao · usa tecla Q"
+        end
+        local live = 0
+        for p in pairs(S.live) do if p.Parent then live += 1 end end
+        local hbmode
+        if not State.hbOn then
+            hbmode = "off"
+        elseif S.box or live > 0 then
+            hbmode = State.hbClient and "esfera" or "servidor"
+        elseif State.hbReal then
+            hbmode = "sem golpe"
+        else
+            hbmode = "off"
+        end
+        S.hbMode = hbmode
+        local rd = ball and ballRoot(ball)
+        local aviso = S.supported and "" or " · FORA DO JOGO"
+        if rd then
+            UI.stLbl.Text = ("%s · %.1f st · v %.0f\nhits %d · hb %s %dx%s"):format(
+                ball.Name, (rd.Position - r.Position).Magnitude, S.vel.Magnitude, S.hits,
+                hbmode, State.hbMult, aviso)
+            UI.stLbl.TextColor3 = C.text
+        else
+            UI.stLbl.Text = ("sem bola · hb %s %dx%s\nentre em partida"):format(
+                hbmode, State.hbMult, aviso)
+            UI.stLbl.TextColor3 = S.supported and C.red or C.amber
+        end
+    end
+end
+
+local function step(dt)
+    safe(function() stepAim(dt) end)
+    safe(function() stepDraw(dt) end)
+end
+
+--// ===================== CLEANUP =====================
+genv.__KNX = function()
+    S.alive = false
+    pcall(function() RunService:UnbindFromRenderStep("KNX") end)
+    for _, c in ipairs(S.conns) do pcall(function() c:Disconnect() end) end
+    S.conns = {}
+    restoreLive()
+    restoreTpl()
+    S.live = {}
+    S.tier = {}
+    hbBase = {}
+    killBox()
+    clearPins()
+    if S.wireMT and S.wireOld then
+        pcall(function()
+            setreadonly(S.wireMT, false)
+            S.wireMT.__namecall = S.wireOld
+            setreadonly(S.wireMT, true)
+        end)
+    end
+    local ch = LP.Character
+    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+    stopRun(hum)
+    pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
+    if math.abs(workspace.Gravity - S.gravBase) > 0.1 then workspace.Gravity = S.gravBase end
+    if hum then
+        if S.wsBase then pcall(function() hum.WalkSpeed = S.wsBase end) end
+        if S.jpBase then
+            pcall(function()
+                if hum.UseJumpPower then hum.JumpPower = S.jpBase else hum.JumpHeight = S.jpBase end
+            end)
+        end
+        if S.rotBase ~= nil then pcall(function() hum.AutoRotate = S.rotBase end) end
+    end
+    for _, list in pairs(pool) do
+        for _, o in ipairs(list) do pcall(function() o.rm() end) end
+    end
+    for _, e in pairs(espObj) do
+        pcall(function() e.txt.rm() end)
+        pcall(function() e.hp.rm() end)
+        pcall(function() e.line.rm() end)
+    end
+    pcall(function() fovCircle.rm() end)
+    pcall(function() fovTxt.rm() end)
+    if UI.gui then safe(function() UI.gui:Destroy() end) end
+    genv.__KNX = nil
+    out("off")
+end
+
+--// ===================== BOOT =====================
+task.spawn(function()
+    S.supported = (PLACES[game.PlaceId] or GAMES[game.GameID]) and true or false
+    if not S.supported then out("AVISO: place", game.PlaceId, "fora da lista") end
+
+    local ok, err = pcall(buildUI)
+    if not ok then out("FALHA NA UI:", err) return end
+    local ok2, err2 = pcall(buildPages)
+    if not ok2 then out("FALHA NAS PAGINAS:", err2) end
+
+    rebuildDraw()
+    RunService:BindToRenderStep("KNX", Enum.RenderPriority.Camera.Value + 1, step)
+
+    resolveHB()
+    cacheBase()
+    sweepLive()
+    applyPow()
+    installWire()
+    out("v40 pronto · hook:", wireHooked, "· place suportado:", S.supported)
+end)
