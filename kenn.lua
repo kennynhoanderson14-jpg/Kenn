@@ -1,4 +1,4 @@
---[[ KENNEX HUB v35 · Volleyball Legends
+--[[ KENNEX HUB v36 · Volleyball Legends
      · abas: COMBATE / VISUAL / MOVER / ACAO / MOVIM
      · v31: cartoes com AutomaticSize + build por pagina isolado
      · v31: movimento corrigido (rot no ar, cooldown de pulo, restore de ws/jp)
@@ -12,7 +12,8 @@
      · v34: escala da barra aprendida sozinha (0-1 ou 0-100)
      · v34: W nao e mais solto se voce ja estiver segurando (sem travamento)
      · v35: SPIKE SEMPRE CARREGADO = sobrescreve o multiplicador, ignora a barra
-     · v35: pin de atributo por sinal (o jogo nao consegue resetar)
+     · v36: GOLPE VIA REMOTE = RF.Serve/RF.Spike com potencia infinita (padrao Sterling)
+     · v36: fallback automatico para o clique se o remote nao existir
 ]]
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -61,6 +62,7 @@ local S = {
     charging = false, runOn = false, runStart = 0, runEnd = 0, runJumped = false,
     runDone = 0, runWs = nil, runKey = false,
     pins = {}, pinConns = {}, meterList = {}, meterT = 0, pinT = 0, powT = 0,
+    rfHits = 0, rfFail = 0,
 }
 
 local function bind(c) S.conns[#S.conns + 1] = c; return c end
@@ -80,6 +82,8 @@ local State = {
     superSpike = false, runTime = 0.7, runSpeed = 28,
     pinMeter = false, pinPct = 100,
     alwaysPower = true, powMult = 8,
+    remoteServe = true, remoteSpike = true, remoteInf = true, remotePow = 100,
+    remoteDir = false,
     holdCharge = false, chargeHold = 0.5,
 }
 local MODES = { "CLIQUE NA BOLA", "BOTAO", "MANUAL" }
@@ -416,7 +420,7 @@ local function buildUI()
         BackgroundTransparency = 1, Text = "one hub · multiple plays", Font = Enum.Font.Gotham,
         TextSize = 8, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, head)
     local pill = mk("TextLabel", { Size = UDim2.fromOffset(28, 12), Position = UDim2.fromOffset(12, 31),
-        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V35",
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V36",
         Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2, ZIndex = 6 }, head)
     mk("UICorner", { CornerRadius = UDim.new(0, 4) }, pill)
     local dot = mk("Frame", { Size = UDim2.fromOffset(6, 6), Position = UDim2.fromOffset(45, 34),
@@ -643,41 +647,50 @@ local function buildPages()
         switch(c1, "AUTO RECEPCAO", "autoRecv", 1)
         switch(c1, "AUTO SPIKE", "autoSpike", 2)
 
-        local c2 = card(p, 2, "SPIKE SEMPRE CARREGADO")
-        switch(c2, "FORCA FIXA", "alwaysPower", 1)
-        slider(c2, "MULTIPLICADOR", "powMult", 2, 1, 30, function(v) return v .. "x" end, 0.5)
-        note(c2, "sobrescreve a forca do spike e do saque · nao depende da barra estar cheia", 3)
-        note(c2, "funciona com qualquer estilo · no TSH e o que substitui a barra", 4)
+        local c2 = card(p, 2, "GOLPE VIA REMOTE")
+        switch(c2, "SPIKE NO REMOTE", "remoteSpike", 1)
+        switch(c2, "SAQUE NO REMOTE", "remoteServe", 2)
+        switch(c2, "POTENCIA INFINITA", "remoteInf", 3)
+        slider(c2, "POTENCIA", "remotePow", 4, 1, 300, function(v) return v .. "" end, 1)
+        switch(c2, "DIRECAO DA CAMERA", "remoteDir", 5)
+        UI.rfNote = note(c2, "remotes: procurando", 6)
+        note(c2, "chama RF.Serve/RF.Spike com potencia infinita · ignora a barra por completo", 7)
+        note(c2, "sem remote, cai sozinho no clique normal · tecla Z = saque", 8)
 
-        local c3 = card(p, 3, "TRAVAR BARRA")
-        switch(c3, "TRAVAR BARRA", "pinMeter", 1, function(on)
+        local c3 = card(p, 3, "SPIKE SEMPRE CARREGADO")
+        switch(c3, "FORCA FIXA", "alwaysPower", 1)
+        slider(c3, "MULTIPLICADOR", "powMult", 2, 1, 30, function(v) return v .. "x" end, 0.5)
+        note(c3, "camada 2: sobrescreve o multiplicador do atributo", 3)
+
+        local c4 = card(p, 4, "TRAVAR BARRA")
+        switch(c4, "TRAVAR BARRA", "pinMeter", 1, function(on)
             if on then safe(buildPins) else safe(clearPins) end
         end)
-        slider(c3, "VALOR DA BARRA", "pinPct", 2, 10, 100, function(v) return v .. "%" end, 1)
-        UI.meterNote = note(c3, "alvo: procurando", 3)
-        note(c3, "extra: grampeia a barra se o jogo expuser o valor", 4)
+        slider(c4, "VALOR DA BARRA", "pinPct", 2, 10, 100, function(v) return v .. "%" end, 1)
+        UI.meterNote = note(c4, "alvo: procurando", 3)
+        note(c4, "camada 3: grampeia a barra se o jogo expuser o valor", 4)
 
-        local c4 = card(p, 4, "CORRER PARA ENCHER")
-        switch(c4, "CORRIDA", "superSpike", 1, function(on)
+        local c5 = card(p, 5, "CORRER PARA ENCHER")
+        switch(c5, "CORRIDA", "superSpike", 1, function(on)
             if not on then safe(function() stopRun(nil) end) end
         end)
-        slider(c4, "TEMPO DE CORRIDA", "runTime", 2, 0.15, 1.5,
+        slider(c5, "TEMPO DE CORRIDA", "runTime", 2, 0.15, 1.5,
             function(v) return ("%.2fs"):format(v) end, 0.05)
-        slider(c4, "VELOCIDADE NA CORRIDA", "runSpeed", 3, 0, 40,
+        slider(c5, "VELOCIDADE NA CORRIDA", "runSpeed", 3, 0, 40,
             function(v) return v == 0 and "padrao" or (v .. "") end, 1)
-        note(c4, "extra: corre, pula e bate · use se quiser a barra cheia de verdade", 4)
+        note(c5, "camada 4: corrida real, so se quiser a barra cheia de verdade", 4)
 
-        local c5 = card(p, 5, "LEITURA DE QUEDA")
-        slider(c5, "RAIO DE QUEDA", "reach", 1, 2, 25, function(v) return v .. "st" end)
-        slider(c5, "ALTURA SPIKE", "spikeH", 2, 2, 20, function(v) return v .. "st" end)
-        slider(c5, "RAIO SPIKE", "spikeR", 3, 2, 25, function(v) return v .. "st" end)
-        note(c5, "o clique sai quando a bola cai dentro do raio", 4)
+        local c6 = card(p, 6, "LEITURA DE QUEDA")
+        slider(c6, "RAIO DE QUEDA", "reach", 1, 2, 25, function(v) return v .. "st" end)
+        slider(c6, "ALTURA SPIKE", "spikeH", 2, 2, 20, function(v) return v .. "st" end)
+        slider(c6, "RAIO SPIKE", "spikeR", 3, 2, 25, function(v) return v .. "st" end)
+        note(c6, "o clique sai quando a bola cai dentro do raio", 4)
 
-        local c6 = card(p, 6, "CARGA POR SEGURAR")
-        switch(c6, "SEGURAR BOTAO", "holdCharge", 1)
-        slider(c6, "TEMPO SEGURANDO", "chargeHold", 2, 0.08, 2,
+        local c7 = card(p, 7, "CARGA POR SEGURAR")
+        switch(c7, "SEGURAR BOTAO", "holdCharge", 1)
+        slider(c7, "TEMPO SEGURANDO", "chargeHold", 2, 0.08, 2,
             function(v) return ("%.2fs"):format(v) end, 0.02)
-        note(c6, "para estilos que carregam no hold (Ronin, Jinko)", 3)
+        note(c7, "para estilos que carregam no hold (Ronin, Jinko)", 3)
     end)
 
     block("MOVIM", function()
@@ -777,6 +790,67 @@ servePath = function()
     local rf = g and g:FindFirstChild("RF")
     local s = rf and rf:FindFirstChild("Serve")
     return s
+end
+
+--// ===================== REMOTE DE GOLPE =====================
+local RFR = nil
+local SPIKE_RF = { "Spike", "Hit", "Attack", "Cortada", "Remate", "SpikeHit", "PowerSpike" }
+
+local function rfRoot()
+    if RFR and RFR.Parent then return RFR end
+    local s = servePath()
+    RFR = s and s.Parent or nil
+    return RFR
+end
+
+local function remoteOf(name)
+    local r = rfRoot()
+    if not r then return nil end
+    local o = r:FindFirstChild(name)
+    if o and (o:IsA("RemoteFunction") or o:IsA("RemoteEvent")) then return o end
+    return nil
+end
+
+local function spikeRemote()
+    for _, n in ipairs(SPIKE_RF) do
+        local o = remoteOf(n)
+        if o then return o, n end
+    end
+end
+
+local function remotePower()
+    if State.remoteInf then return math.huge end
+    return State.remotePow
+end
+
+local function camFlat()
+    local c = cam()
+    if not c then return Vector3.zero end
+    local v = c.CFrame.LookVector
+    v = Vector3.new(v.X, 0, v.Z)
+    if v.Magnitude < 0.01 then return Vector3.zero end
+    return v.Unit
+end
+
+local function fireRemote(which)
+    local p = remotePower()
+    if which == "serve" then
+        local s = remoteOf("Serve")
+        if not s then return false end
+        if s:IsA("RemoteFunction") then
+            return pcall(function() s:InvokeServer(Vector3.zero, p) end)
+        end
+        return pcall(function() s:FireServer(Vector3.zero, p) end)
+    end
+    local r = spikeRemote()
+    if not r then return false end
+    local dir = State.remoteDir and camFlat() or Vector3.zero
+    if r:IsA("RemoteFunction") then
+        if pcall(function() r:InvokeServer(dir, p) end) then return true end
+        if pcall(function() r:InvokeServer(p) end) then return true end
+        return pcall(function() r:InvokeServer() end)
+    end
+    return pcall(function() r:FireServer(dir, p) end)
 end
 
 --// ===================== GRUPOS DE GOLPE =====================
@@ -1179,6 +1253,19 @@ bind(UIS.InputBegan:Connect(function(i)
     if State.mode == 3 then S.manual = Vector2.new(x, y) end
 end))
 
+bind(UIS.InputBegan:Connect(function(i, gp)
+    if gp then return end
+    if i.KeyCode ~= Enum.KeyCode.Z then return end
+    if not State.remoteServe then return end
+    if fireRemote("serve") then
+        S.rfHits += 1
+        setStatus("saque no remote", C.green)
+    else
+        S.rfFail += 1
+        setStatus("remote de saque ausente", C.amber)
+    end
+end))
+
 --// ===================== FORCA FIXA =====================
 local POWKEYS = { "GameSpikePowerMultiplier", "GameServePowerMultiplier" }
 
@@ -1492,6 +1579,23 @@ local function doAttack()
     end
 end
 
+local function doSpike()
+    local now = os.clock()
+    if S.charging then return end
+    if now - S.lastPress < CFG.cd then return end
+    if State.tiltMode > 1 then safe(applyTilt) end
+    if State.remoteSpike then
+        if fireRemote("spike") then
+            S.lastPress = now
+            S.hits += 1
+            S.rfHits += 1
+            return
+        end
+        S.rfFail += 1
+    end
+    doAttack()
+end
+
 local function doJump()
     local now = os.clock()
     if now - S.jumpT < CFG.jumpCd then return end
@@ -1615,6 +1719,7 @@ bind(LP.CharacterAdded:Connect(function()
     S.meterT = 0
     S.chgHost = nil
     S.chgKey = nil
+    RFR = nil
     if State.pinMeter then task.delay(1.5, function() if State.pinMeter then safe(buildPins) end end) end
     task.delay(1.2, function() safe(applyPow) end)
 end))
@@ -1870,7 +1975,8 @@ local function stepDraw(dt)
             local high = (root.Position.Y - r.Position.Y) >= State.spikeH and dist <= State.spikeR
 
             if State.jump and (high or (nearLand and S.vel.Y > 2)) then doJump() end
-            if (State.autoRecv and nearLand) or (State.autoSpike and high) then doAttack() end
+            if State.autoRecv and nearLand then doAttack() end
+            if State.autoSpike and high then doSpike() end
 
             if State.superSpike then
                 local canStart = dist <= State.spikeR and dist >= 4
@@ -1885,7 +1991,7 @@ local function stepDraw(dt)
                     if not S.runJumped and os.clock() - S.runStart >= State.runTime then
                         S.runJumped = true
                         doJump()
-                        task.delay(0.12, function() doAttack() end)
+                        task.delay(0.12, function() doSpike() end)
                     end
                     if S.runJumped and os.clock() - S.runStart > State.runTime + 0.5 then
                         stopRun(hum)
@@ -1942,6 +2048,13 @@ local function stepDraw(dt)
 
     if os.clock() - S.uiT > 0.25 and UI.stLbl then
         S.uiT = os.clock()
+        if UI.rfNote then
+            local s = remoteOf("Serve")
+            local r2, rn = spikeRemote()
+            UI.rfNote.Text = ("saque: %s · spike: %s · ok %d / falha %d"):format(
+                s and "ok" or "-", rn or "-", S.rfHits, S.rfFail)
+            UI.rfNote.TextColor3 = (s or r2) and C.green or C.dim
+        end
         if UI.meterNote then
             if #S.pins > 0 then
                 local p = S.pins[1]
@@ -1972,15 +2085,16 @@ local function stepDraw(dt)
         local rd = ball and ballRoot(ball)
         local aviso = S.supported and "" or " · FORA DO JOGO"
         local pow = State.alwaysPower and (" · forca " .. State.powMult .. "x") or ""
+        local rf = State.remoteSpike and " · RF" or ""
         local run = S.runOn and (S.runJumped and " · PULO" or " · CORRENDO") or ""
         if rd then
-            UI.stLbl.Text = ("%s · %.1f st · v %.0f\nhits %d · hb %s %dx%s%s%s"):format(
+            UI.stLbl.Text = ("%s · %.1f st · v %.0f\nhits %d · hb %s %dx%s%s%s%s"):format(
                 ball.Name, (rd.Position - r.Position).Magnitude, S.vel.Magnitude, S.hits,
-                hbmode, State.hbMult, pow, run, aviso)
+                hbmode, State.hbMult, pow, rf, run, aviso)
             UI.stLbl.TextColor3 = C.text
         else
-            UI.stLbl.Text = ("sem bola · hb %s %dx%s%s\nentre em partida"):format(
-                hbmode, State.hbMult, pow, aviso)
+            UI.stLbl.Text = ("sem bola · hb %s %dx%s%s%s\nentre em partida"):format(
+                hbmode, State.hbMult, pow, rf, aviso)
             UI.stLbl.TextColor3 = S.supported and C.red or C.amber
         end
     end
@@ -2050,5 +2164,5 @@ task.spawn(function()
     cacheBase()
     sweepLive()
     applyPow()
-    out("v35 pronto · place suportado:", S.supported)
+    out("v36 pronto · place suportado:", S.supported)
 end)
