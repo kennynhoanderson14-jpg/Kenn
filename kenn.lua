@@ -1,11 +1,12 @@
---[[ KENNEX HUB v43 · Volleyball Legends
+--[[ KENNEX HUB v44 · Volleyball Legends
      · abas: COMBATE / VISUAL / MOVER / ACAO / MOVIM
      · v32: esfera robusta (CanTouch fixo, raio com fallback, clamp)
      · v36: GOLPE VIA REMOTE = RF.Serve/RF.Spike com potencia infinita
      · v40: charge e TSH sem carga removidos
      · v41: removidos card PODER, status do rodape, corrida automatica e hook de rede
-     · v42: passe de visual — splash de carga, chrome do painel, glow e chips no desenho
+     · v42: passe de visual — splash, chrome do painel, glow e chips no desenho
      · v43: splash refeito e boot sem travamento · barra fixa removida
+     · v44: painel nasce visivel · tweens a prova de falha · vigia e cartao de erro
 ]]
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -117,12 +118,24 @@ local function mk(cls, props, par)
 end
 local function safe(f) local ok, e = pcall(f); if not ok then out("ERRO", e) end return ok end
 
+-- animacao a prova de falha
+local function tw(obj, info, props)
+    if not obj then return nil end
+    local ok, t = pcall(function() return Tween:Create(obj, info, props) end)
+    if ok and t then pcall(function() t:Play() end); return t end
+    return nil
+end
+
 local UI = {}
 
 local function grad(parent, a, b, rot, t0, t1)
-    return mk("UIGradient", { Color = ColorSequence.new(a, b), Rotation = rot or 90,
-        Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, t0 or 0),
-            NumberSequenceKeypoint.new(1, t1 or 0) }) }, parent)
+    local ok, g = pcall(function()
+        return mk("UIGradient", { Color = ColorSequence.new(a, b), Rotation = rot or 90,
+            Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, t0 or 0),
+                NumberSequenceKeypoint.new(1, t1 or 0) }) }, parent)
+    end)
+    if ok then return g end
+    return nil
 end
 
 --// ===================== DESENHO =====================
@@ -293,7 +306,7 @@ local function buildLoader()
     local bead = mk("Frame", { Size = UDim2.fromOffset(7, 7), AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.new(0.5, 0, 0, 0), BackgroundColor3 = C.accent2, BorderSizePixel = 0 }, orbit)
     mk("UICorner", { CornerRadius = UDim.new(1, 0) }, bead)
-    local mark = mk("TextLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+    mk("TextLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
         Text = "K", Font = Enum.Font.GothamBlack, TextSize = 17, TextColor3 = C.text }, ring)
 
     local name = mk("TextLabel", { Size = UDim2.fromOffset(190, 22), Position = UDim2.fromOffset(74, 20),
@@ -304,7 +317,7 @@ local function buildLoader()
         BackgroundTransparency = 1, Text = "volleyball legends", Font = Enum.Font.Gotham,
         TextSize = 9, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left }, box)
     local tag = mk("TextLabel", { Size = UDim2.fromOffset(44, 14), Position = UDim2.fromOffset(74, 62),
-        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V43",
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V44",
         Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2 }, box)
     mk("UICorner", { CornerRadius = UDim.new(0, 5) }, tag)
     mk("UIStroke", { Color = C.accent, Thickness = 1, Transparency = 0.6 }, tag)
@@ -328,22 +341,21 @@ local function buildLoader()
         BackgroundTransparency = 1, Text = "aguarde · nao feche o painel", Font = Enum.Font.Gotham,
         TextSize = 8, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left }, box)
 
-    Tween:Create(back, TweenInfo.new(0.26), { BackgroundTransparency = 0 }):Play()
-    Tween:Create(box, TweenInfo.new(0.34, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
-        { BackgroundTransparency = 0 }):Play()
-    Tween:Create(bst, TweenInfo.new(0.34), { Transparency = 0.25 }):Play()
-    Tween:Create(tint, TweenInfo.new(0.34), { BackgroundTransparency = 0.94 }):Play()
-    local spin = Tween:Create(orbit, TweenInfo.new(1.1, Enum.EasingStyle.Linear,
+    tw(back, TweenInfo.new(0.26), { BackgroundTransparency = 0 })
+    tw(box, TweenInfo.new(0.34, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+        { BackgroundTransparency = 0 })
+    tw(bst, TweenInfo.new(0.34), { Transparency = 0.25 })
+    tw(tint, TweenInfo.new(0.34), { BackgroundTransparency = 0.94 })
+    local spin = tw(orbit, TweenInfo.new(1.1, Enum.EasingStyle.Linear,
         Enum.EasingDirection.Out, -1), { Rotation = 360 })
-    spin:Play()
 
     local api = { finished = false }
     function api.step(txt, p)
         if api.finished then return end
         if txt then stage.Text = txt end
         if p then
-            Tween:Create(fill, TweenInfo.new(0.26, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-                { Size = UDim2.fromScale(math.clamp(p, 0.02, 1), 1) }):Play()
+            tw(fill, TweenInfo.new(0.26, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                { Size = UDim2.fromScale(math.clamp(p, 0.02, 1), 1) })
             pct.Text = ("%d%%"):format(math.floor(math.clamp(p, 0, 1) * 100))
         end
     end
@@ -354,14 +366,14 @@ local function buildLoader()
         pct.Text = "100%"
         pct.TextColor3 = C.green
         stage.TextColor3 = C.green
-        pcall(function() spin:Cancel() end)
-        Tween:Create(box, TweenInfo.new(0.26, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+        if spin then pcall(function() spin:Cancel() end) end
+        tw(box, TweenInfo.new(0.26, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
             { BackgroundTransparency = 1, Position = UDim2.new(0.5, 0, 0.5, -16),
-              Size = UDim2.fromOffset(284, 176) }):Play()
-        Tween:Create(bst, TweenInfo.new(0.2), { Transparency = 1 }):Play()
-        Tween:Create(back, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
-            { BackgroundTransparency = 1 }):Play()
-        task.delay(0.42, function() safe(function() gui:Destroy() end) end)
+              Size = UDim2.fromOffset(284, 176) })
+        tw(bst, TweenInfo.new(0.2), { Transparency = 1 })
+        tw(back, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+            { BackgroundTransparency = 1 })
+        task.delay(0.42, function() pcall(function() gui:Destroy() end) end)
     end
     return api
 end
@@ -383,12 +395,10 @@ local function showTab(i)
     for k, p in pairs(pages) do p.page.Visible = (k == i) end
     for k, b in pairs(pillOf) do
         local on = k == i
-        Tween:Create(b, TweenInfo.new(0.14),
-            { BackgroundColor3 = on and C.accent or C.card }):Play()
+        tw(b, TweenInfo.new(0.14), { BackgroundColor3 = on and C.accent or C.card })
         b.TextColor3 = on and C.text or C.dim
         if b.bar then
-            Tween:Create(b.bar, TweenInfo.new(0.16),
-                { BackgroundTransparency = on and 0 or 1 }):Play()
+            tw(b.bar, TweenInfo.new(0.16), { BackgroundTransparency = on and 0 or 1 })
         end
     end
 end
@@ -436,14 +446,16 @@ local function switch(c, label, key, order, cb)
     local kst = mk("UIStroke", { Color = C.accent2, Thickness = 1.4, Transparency = 1 }, knob)
     local function paint()
         local on = State[key]
-        Tween:Create(track, TweenInfo.new(0.14), { BackgroundColor3 = on and C.accent or C.inset }):Play()
-        tg.Transparency = NumberSequence.new(on and 0 or 1)
-        Tween:Create(rst, TweenInfo.new(0.14), { Color = on and C.accent or C.line,
-            Transparency = on and 0.35 or 0.55 }):Play()
-        Tween:Create(kst, TweenInfo.new(0.14), { Transparency = on and 0.2 or 1 }):Play()
-        Tween:Create(knob, TweenInfo.new(0.14),
+        tw(track, TweenInfo.new(0.14), { BackgroundColor3 = on and C.accent or C.inset })
+        if tg then
+            pcall(function() tg.Transparency = NumberSequence.new(on and 0 or 1) end)
+        end
+        tw(rst, TweenInfo.new(0.14), { Color = on and C.accent or C.line,
+            Transparency = on and 0.35 or 0.55 })
+        tw(kst, TweenInfo.new(0.14), { Transparency = on and 0.2 or 1 })
+        tw(knob, TweenInfo.new(0.14),
             { Position = on and UDim2.fromOffset(19, 2) or UDim2.fromOffset(2, 2),
-              BackgroundColor3 = on and C.text or C.dim }):Play()
+              BackgroundColor3 = on and C.text or C.dim })
     end
     row.Activated:Connect(function()
         State[key] = not State[key]
@@ -451,10 +463,10 @@ local function switch(c, label, key, order, cb)
         if cb then safe(function() cb(State[key]) end) end
     end)
     row.MouseEnter:Connect(function()
-        if not State[key] then Tween:Create(row, TweenInfo.new(0.12), { BackgroundColor3 = C.card }):Play() end
+        if not State[key] then tw(row, TweenInfo.new(0.12), { BackgroundColor3 = C.card }) end
     end)
     row.MouseLeave:Connect(function()
-        if not State[key] then Tween:Create(row, TweenInfo.new(0.12), { BackgroundColor3 = C.surface }):Play() end
+        if not State[key] then tw(row, TweenInfo.new(0.12), { BackgroundColor3 = C.surface }) end
     end)
     paint()
 end
@@ -507,11 +519,11 @@ local function slider(c, label, key, order, min, max, fmt, step, cb)
     hit.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
             fromX(i.Position.X)
-            Tween:Create(grip, TweenInfo.new(0.1), { Size = UDim2.fromOffset(15, 15) }):Play()
+            tw(grip, TweenInfo.new(0.1), { Size = UDim2.fromOffset(15, 15) })
         end
     end)
     hit.InputEnded:Connect(function()
-        Tween:Create(grip, TweenInfo.new(0.12), { Size = UDim2.fromOffset(11, 11) }):Play()
+        tw(grip, TweenInfo.new(0.12), { Size = UDim2.fromOffset(11, 11) })
     end)
     hit.InputChanged:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.Touch
@@ -527,18 +539,18 @@ local function button(c, txt, order, cb, col)
     local st = mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.55 }, b)
     b.Activated:Connect(function()
         safe(cb)
-        Tween:Create(b, TweenInfo.new(0.08), { BackgroundColor3 = C.card }):Play()
+        tw(b, TweenInfo.new(0.08), { BackgroundColor3 = C.card })
         task.delay(0.1, function()
-            safe(function() Tween:Create(b, TweenInfo.new(0.14), { BackgroundColor3 = C.surface }):Play() end)
+            tw(b, TweenInfo.new(0.14), { BackgroundColor3 = C.surface })
         end)
     end)
     b.MouseEnter:Connect(function()
-        Tween:Create(b, TweenInfo.new(0.12), { BackgroundColor3 = C.card }):Play()
-        Tween:Create(st, TweenInfo.new(0.12), { Color = C.accent, Transparency = 0.35 }):Play()
+        tw(b, TweenInfo.new(0.12), { BackgroundColor3 = C.card })
+        tw(st, TweenInfo.new(0.12), { Color = C.accent, Transparency = 0.35 })
     end)
     b.MouseLeave:Connect(function()
-        Tween:Create(b, TweenInfo.new(0.12), { BackgroundColor3 = C.surface }):Play()
-        Tween:Create(st, TweenInfo.new(0.12), { Color = C.line, Transparency = 0.55 }):Play()
+        tw(b, TweenInfo.new(0.12), { BackgroundColor3 = C.surface })
+        tw(st, TweenInfo.new(0.12), { Color = C.line, Transparency = 0.55 })
     end)
     return b
 end
@@ -573,10 +585,10 @@ local function buildUI()
     local c0 = workspace.CurrentCamera
     if c0 then vs = c0.ViewportSize end
 
-    local W = math.clamp(math.floor(vs.X * 0.66), 250, 310)
-    local H = math.clamp(math.floor(vs.Y * 0.68), 280, 420)
+    local W = math.clamp(math.floor(vs.X * 0.66), 248, 310)
+    local H = math.clamp(math.floor(vs.Y * 0.66), 236, 420)
     local px = 12
-    local py = math.max(10, math.floor(vs.Y * 0.10))
+    local py = math.clamp(math.floor(vs.Y * 0.10), 8, math.max(8, math.floor(vs.Y) - H - 8))
 
     local gui = mk("ScreenGui", { Name = "KennexHub", ResetOnSpawn = false,
         IgnoreGuiInset = true, DisplayOrder = 9999 }, gpar)
@@ -592,8 +604,10 @@ local function buildUI()
     local win = mk("Frame", { Size = UDim2.fromOffset(W, H), AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.fromOffset(px + W * 0.5, py + H * 0.5),
         BackgroundColor3 = C.bg, BorderSizePixel = 0, Active = true,
-        ClipsDescendants = true, Visible = false, ZIndex = 1 }, gui)
+        ClipsDescendants = true, ZIndex = 1 }, gui)
     UI.win = win
+    UI.winSize = UDim2.fromOffset(W, H)
+    UI.winPos = UDim2.fromOffset(px + W * 0.5, py + H * 0.5)
     mk("UICorner", { CornerRadius = UDim.new(0, 16) }, win)
     mk("UIStroke", { Color = C.accent, Thickness = 1.2, Transparency = 0.35 }, win)
 
@@ -621,7 +635,7 @@ local function buildUI()
         BackgroundTransparency = 1, Text = "one hub · multiple plays", Font = Enum.Font.Gotham,
         TextSize = 8, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, head)
     local pill = mk("TextLabel", { Size = UDim2.fromOffset(28, 12), Position = UDim2.fromOffset(12, 31),
-        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V43",
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V44",
         Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2, ZIndex = 6 }, head)
     mk("UICorner", { CornerRadius = UDim.new(0, 4) }, pill)
     mk("UIStroke", { Color = C.accent, Thickness = 1, Transparency = 0.6 }, pill)
@@ -642,10 +656,10 @@ local function buildUI()
         mk("UICorner", { CornerRadius = UDim.new(0, 8) }, b)
         mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.4 }, b)
         b.MouseEnter:Connect(function()
-            Tween:Create(b, TweenInfo.new(0.1), { BackgroundColor3 = C.card }):Play()
+            tw(b, TweenInfo.new(0.1), { BackgroundColor3 = C.card })
         end)
         b.MouseLeave:Connect(function()
-            Tween:Create(b, TweenInfo.new(0.1), { BackgroundColor3 = C.inset }):Play()
+            tw(b, TweenInfo.new(0.1), { BackgroundColor3 = C.inset })
         end)
         return b
     end
@@ -682,16 +696,16 @@ local function buildUI()
         local st = mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.5 }, b)
         b.Activated:Connect(function()
             safe(cb)
-            Tween:Create(st, TweenInfo.new(0.1), { Color = C.accent2, Transparency = 0.2 }):Play()
+            tw(st, TweenInfo.new(0.1), { Color = C.accent2, Transparency = 0.2 })
             task.delay(0.15, function()
-                safe(function() Tween:Create(st, TweenInfo.new(0.15), { Color = C.line, Transparency = 0.5 }):Play() end)
+                tw(st, TweenInfo.new(0.15), { Color = C.line, Transparency = 0.5 })
             end)
         end)
         b.MouseEnter:Connect(function()
-            Tween:Create(b, TweenInfo.new(0.1), { BackgroundColor3 = C.card }):Play()
+            tw(b, TweenInfo.new(0.1), { BackgroundColor3 = C.card })
         end)
         b.MouseLeave:Connect(function()
-            Tween:Create(b, TweenInfo.new(0.1), { BackgroundColor3 = C.surface }):Play()
+            tw(b, TweenInfo.new(0.1), { BackgroundColor3 = C.surface })
         end)
         return b
     end
@@ -789,16 +803,33 @@ local function buildUI()
     UI.reveal = function()
         win.Visible = true
         shadow.Visible = true
-        win.Size = UDim2.fromOffset(math.floor(W * 0.9), math.floor(H * 0.9))
-        win.BackgroundTransparency = 0.2
-        shadow.Size = win.Size
-        Tween:Create(win, TweenInfo.new(0.44, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
-            { Size = UDim2.fromOffset(W, H), BackgroundTransparency = 0 }):Play()
-        Tween:Create(shadow, TweenInfo.new(0.44, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
-            { Size = UDim2.fromOffset(W + 12, H + 12) }):Play()
+        win.Size = UI.winSize
+        win.BackgroundTransparency = 0.12
+        local alvo = UI.winPos
+        win.Position = UDim2.fromOffset(alvo.X.Offset, alvo.Y.Offset + 12)
+        tw(win, TweenInfo.new(0.32, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+            { BackgroundTransparency = 0, Position = alvo })
     end
 
     return true
+end
+
+local function buildFallback(err)
+    local gui = mk("ScreenGui", { Name = "KennexErro", ResetOnSpawn = false,
+        IgnoreGuiInset = true, DisplayOrder = 10002 }, gpar)
+    UI.errGui = gui
+    local f = mk("Frame", { Size = UDim2.fromOffset(300, 128), Position = UDim2.fromOffset(12, 90),
+        BackgroundColor3 = C.bg, BorderSizePixel = 0 }, gui)
+    mk("UICorner", { CornerRadius = UDim.new(0, 12) }, f)
+    mk("UIStroke", { Color = C.red, Thickness = 1.2, Transparency = 0.25 }, f)
+    mk("TextLabel", { Size = UDim2.new(1, -20, 0, 16), Position = UDim2.fromOffset(10, 10),
+        BackgroundTransparency = 1, Text = "KENNEX · falha ao montar o painel",
+        Font = Enum.Font.GothamBold, TextSize = 9, TextColor3 = C.red,
+        TextXAlignment = Enum.TextXAlignment.Left }, f)
+    mk("TextLabel", { Size = UDim2.new(1, -20, 1, -40), Position = UDim2.fromOffset(10, 30),
+        BackgroundTransparency = 1, Text = tostring(err), Font = Enum.Font.Code, TextSize = 8,
+        TextColor3 = C.text, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top }, f)
 end
 
 --// ===================== CONTEUDO =====================
@@ -2141,6 +2172,7 @@ genv.__KNX = function()
     end
     pcall(function() fovCircle.rm() end)
     pcall(function() fovTxt.rm() end)
+    if UI.errGui then safe(function() UI.errGui:Destroy() end) end
     if UI.gui then safe(function() UI.gui:Destroy() end) end
     genv.__KNX = nil
     out("off")
@@ -2152,19 +2184,33 @@ task.spawn(function()
     if not S.supported then out("AVISO: place", game.PlaceId, "fora da lista") end
 
     local load = buildLoader()
+    task.delay(4, function() if not load.finished then safe(load.done) end end)
 
     local function finish()
         load.step("pronto", 1)
         task.wait(0.12)
         if UI.reveal then safe(UI.reveal) end
         load.done()
+        task.delay(0.5, function()
+            if not UI.win then return end
+            safe(function()
+                UI.win.Visible = true
+                UI.win.Size = UI.winSize
+                UI.win.Position = UI.winPos
+                UI.win.BackgroundTransparency = 0
+                if UI.shadow then UI.shadow.Visible = true end
+            end)
+        end)
     end
 
     load.step("iniciando", 0.1)
     task.wait(0.2)
 
     local ok, err = pcall(buildUI)
-    if not ok then out("FALHA NA UI:", err) end
+    if not ok then
+        out("FALHA NA UI:", err)
+        safe(function() buildFallback(err) end)
+    end
     load.step(ok and "montando painel" or "painel com falha", 0.34)
     task.wait(0.1)
 
@@ -2173,7 +2219,9 @@ task.spawn(function()
     load.step("carregando modulos", 0.58)
 
     safe(rebuildDraw)
-    RunService:BindToRenderStep("KNX", Enum.RenderPriority.Camera.Value + 1, step)
+    safe(function()
+        RunService:BindToRenderStep("KNX", Enum.RenderPriority.Camera.Value + 1, step)
+    end)
     load.step("lendo hitboxes", 0.78)
     task.wait(0.05)
 
@@ -2185,5 +2233,5 @@ task.spawn(function()
     task.wait(0.14)
 
     finish()
-    out("v43 pronto · place suportado:", S.supported)
+    out("v44 pronto · place suportado:", S.supported)
 end)
