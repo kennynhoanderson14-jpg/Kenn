@@ -1,4 +1,4 @@
---[[ KENNEX HUB v34 · Volleyball Legends
+--[[ KENNEX HUB v35 · Volleyball Legends
      · abas: COMBATE / VISUAL / MOVER / ACAO / MOVIM
      · v31: cartoes com AutomaticSize + build por pagina isolado
      · v31: movimento corrigido (rot no ar, cooldown de pulo, restore de ws/jp)
@@ -11,6 +11,8 @@
      · v34: TRAVAR BARRA = pin por sinal de mudanca (atributo ou ValueBase)
      · v34: escala da barra aprendida sozinha (0-1 ou 0-100)
      · v34: W nao e mais solto se voce ja estiver segurando (sem travamento)
+     · v35: SPIKE SEMPRE CARREGADO = sobrescreve o multiplicador, ignora a barra
+     · v35: pin de atributo por sinal (o jogo nao consegue resetar)
 ]]
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -58,7 +60,7 @@ local S = {
     jumpT = 0, wsBase = nil, jpBase = nil, rotBase = nil,
     charging = false, runOn = false, runStart = 0, runEnd = 0, runJumped = false,
     runDone = 0, runWs = nil, runKey = false,
-    pins = {}, pinConns = {}, meterList = {}, meterT = 0, pinT = 0,
+    pins = {}, pinConns = {}, meterList = {}, meterT = 0, pinT = 0, powT = 0,
 }
 
 local function bind(c) S.conns[#S.conns + 1] = c; return c end
@@ -77,6 +79,7 @@ local State = {
     tiltMode = 1,
     superSpike = false, runTime = 0.7, runSpeed = 28,
     pinMeter = false, pinPct = 100,
+    alwaysPower = true, powMult = 8,
     holdCharge = false, chargeHold = 0.5,
 }
 local MODES = { "CLIQUE NA BOLA", "BOTAO", "MANUAL" }
@@ -413,7 +416,7 @@ local function buildUI()
         BackgroundTransparency = 1, Text = "one hub · multiple plays", Font = Enum.Font.Gotham,
         TextSize = 8, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, head)
     local pill = mk("TextLabel", { Size = UDim2.fromOffset(28, 12), Position = UDim2.fromOffset(12, 31),
-        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V34",
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V35",
         Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2, ZIndex = 6 }, head)
     mk("UICorner", { CornerRadius = UDim.new(0, 4) }, pill)
     local dot = mk("Frame", { Size = UDim2.fromOffset(6, 6), Position = UDim2.fromOffset(45, 34),
@@ -598,6 +601,7 @@ local function buildPages()
         attr("GameSpeedMultiplier", "VELOCIDADE", 1.5, 0.05, 7, c3)
         attr("GameJumpPowerMultiplier", "FORCA PULO", 5, 0.1, 8, c3)
         attr("GameDiveSpeedMultiplier", "VELOCIDADE DIVE", 5, 0.1, 9, c3)
+        note(c3, "spike e saque sao dominados pelo cartao do TSH quando ele esta ligado", 10)
     end)
 
     block("VISUAL", function()
@@ -639,41 +643,41 @@ local function buildPages()
         switch(c1, "AUTO RECEPCAO", "autoRecv", 1)
         switch(c1, "AUTO SPIKE", "autoSpike", 2)
 
-        local c2 = card(p, 2, "BARRA CHEIA · TSH")
-        switch(c2, "TRAVAR BARRA", "pinMeter", 1, function(on)
+        local c2 = card(p, 2, "SPIKE SEMPRE CARREGADO")
+        switch(c2, "FORCA FIXA", "alwaysPower", 1)
+        slider(c2, "MULTIPLICADOR", "powMult", 2, 1, 30, function(v) return v .. "x" end, 0.5)
+        note(c2, "sobrescreve a forca do spike e do saque · nao depende da barra estar cheia", 3)
+        note(c2, "funciona com qualquer estilo · no TSH e o que substitui a barra", 4)
+
+        local c3 = card(p, 3, "TRAVAR BARRA")
+        switch(c3, "TRAVAR BARRA", "pinMeter", 1, function(on)
             if on then safe(buildPins) else safe(clearPins) end
         end)
-        slider(c2, "VALOR DA BARRA", "pinPct", 2, 10, 100, function(v) return v .. "%" end, 1)
-        UI.meterNote = note(c2, "alvo: procurando", 3)
-        note(c2, "grampeia o valor da barra assim que o jogo escreve · nao precisa correr", 4)
+        slider(c3, "VALOR DA BARRA", "pinPct", 2, 10, 100, function(v) return v .. "%" end, 1)
+        UI.meterNote = note(c3, "alvo: procurando", 3)
+        note(c3, "extra: grampeia a barra se o jogo expuser o valor", 4)
 
-        local c3 = card(p, 3, "CORRER PARA ENCHER")
-        switch(c3, "CORRIDA", "superSpike", 1, function(on)
+        local c4 = card(p, 4, "CORRER PARA ENCHER")
+        switch(c4, "CORRIDA", "superSpike", 1, function(on)
             if not on then safe(function() stopRun(nil) end) end
         end)
-        slider(c3, "TEMPO DE CORRIDA", "runTime", 2, 0.15, 1.5,
+        slider(c4, "TEMPO DE CORRIDA", "runTime", 2, 0.15, 1.5,
             function(v) return ("%.2fs"):format(v) end, 0.05)
-        slider(c3, "VELOCIDADE NA CORRIDA", "runSpeed", 3, 0, 40,
+        slider(c4, "VELOCIDADE NA CORRIDA", "runSpeed", 3, 0, 40,
             function(v) return v == 0 and "padrao" or (v .. "") end, 1)
-        note(c3, "reforco: corre, pula e bate · use se a barra nao for exposta", 4)
+        note(c4, "extra: corre, pula e bate · use se quiser a barra cheia de verdade", 4)
 
-        local c4 = card(p, 4, "LEITURA DE QUEDA")
-        slider(c4, "RAIO DE QUEDA", "reach", 1, 2, 25, function(v) return v .. "st" end)
-        slider(c4, "ALTURA SPIKE", "spikeH", 2, 2, 20, function(v) return v .. "st" end)
-        slider(c4, "RAIO SPIKE", "spikeR", 3, 2, 25, function(v) return v .. "st" end)
-        note(c4, "o clique sai quando a bola cai dentro do raio", 4)
+        local c5 = card(p, 5, "LEITURA DE QUEDA")
+        slider(c5, "RAIO DE QUEDA", "reach", 1, 2, 25, function(v) return v .. "st" end)
+        slider(c5, "ALTURA SPIKE", "spikeH", 2, 2, 20, function(v) return v .. "st" end)
+        slider(c5, "RAIO SPIKE", "spikeR", 3, 2, 25, function(v) return v .. "st" end)
+        note(c5, "o clique sai quando a bola cai dentro do raio", 4)
 
-        local c5 = card(p, 5, "CARGA POR SEGURAR")
-        switch(c5, "SEGURAR BOTAO", "holdCharge", 1)
-        slider(c5, "TEMPO SEGURANDO", "chargeHold", 2, 0.08, 2,
+        local c6 = card(p, 6, "CARGA POR SEGURAR")
+        switch(c6, "SEGURAR BOTAO", "holdCharge", 1)
+        slider(c6, "TEMPO SEGURANDO", "chargeHold", 2, 0.08, 2,
             function(v) return ("%.2fs"):format(v) end, 0.02)
-        note(c5, "para estilos que carregam no hold (Ronin, Jinko)", 3)
-
-        local c6 = card(p, 6, "CARGA POR ATRIBUTO")
-        switch(c6, "FORCAR ATRIBUTO", "forceCharge", 1)
-        slider(c6, "VALOR", "chargePct", 2, 10, 100, function(v) return v .. "%" end, 1)
-        UI.chgNote = note(c6, "alvo: procurando", 3)
-        note(c6, "escreve o valor da barra direto · depende do estilo expor o valor", 4)
+        note(c6, "para estilos que carregam no hold (Ronin, Jinko)", 3)
     end)
 
     block("MOVIM", function()
@@ -1175,12 +1179,36 @@ bind(UIS.InputBegan:Connect(function(i)
     if State.mode == 3 then S.manual = Vector2.new(x, y) end
 end))
 
+--// ===================== FORCA FIXA =====================
+local POWKEYS = { "GameSpikePowerMultiplier", "GameServePowerMultiplier" }
+
+local function applyPow()
+    if not State.alwaysPower then return end
+    for _, k in ipairs(POWKEYS) do
+        safe(function() LP:SetAttribute(k, State.powMult) end)
+    end
+end
+
+for _, k in ipairs(POWKEYS) do
+    local ok, sig = pcall(function() return LP:GetAttributeChangedSignal(k) end)
+    if ok and sig then
+        bind(sig:Connect(function()
+            if not State.alwaysPower then return end
+            local cur = LP:GetAttribute(k)
+            if type(cur) == "number" and math.abs(cur - State.powMult) > 0.01 then
+                safe(function() LP:SetAttribute(k, State.powMult) end)
+            end
+        end))
+    end
+end
+
 --// ===================== BARRA / PIN =====================
 local MKEY = { "charge", "carga", "meter", "medidor", "super", "spike", "power",
     "bar", "fill", "energy", "boost", "forca" }
 
 local function nameHit(n)
     n = string.lower(n)
+    if string.sub(n, 1, 4) == "game" then return false end
     for _, k in ipairs(MKEY) do
         if string.find(n, k, 1, true) then return true end
     end
@@ -1273,7 +1301,7 @@ local function buildPins()
     end
 end
 
---// ===================== HABILIDADE / CARGA / TILT =====================
+--// ===================== HABILIDADE / TILT =====================
 local ABILWORD = { "habil", "abilit", "skill", "poder", "power", "special", "ult", "estilo" }
 
 local function findAbilBtn()
@@ -1314,56 +1342,6 @@ local function pressAbility()
         task.delay(0.05, function()
             safe(function() VIM:SendKeyEvent(false, Enum.KeyCode.Q, false, game) end)
         end)
-    end
-end
-
-local function chargeTarget()
-    if S.chgHost and S.chgHost.Parent then
-        if S.chgKey or S.chgHost:IsA("ValueBase") then return S.chgHost, S.chgKey end
-    end
-    S.chgKey, S.chgHost = nil, nil
-    for _, h in ipairs({ LP, LP.Character }) do
-        if h then
-            for key, v in pairs(h:GetAttributes()) do
-                local n = string.lower(key)
-                if type(v) == "number" and (string.find(n, "charge", 1, true)
-                    or string.find(n, "carga", 1, true)) then
-                    S.chgKey, S.chgHost = key, h
-                    return h, key
-                end
-            end
-        end
-    end
-    for _, root in ipairs({ LP, LP.Character, LP:FindFirstChildOfClass("PlayerGui") }) do
-        if root then
-            for _, d in ipairs(root:GetDescendants()) do
-                if d:IsA("NumberValue") or d:IsA("IntValue") then
-                    local n = string.lower(d.Name)
-                    if string.find(n, "charge", 1, true) or string.find(n, "carga", 1, true) then
-                        S.chgKey, S.chgHost = nil, d
-                        return d, nil
-                    end
-                end
-            end
-        end
-    end
-end
-
-local function applyCharge()
-    if not State.forceCharge then return end
-    if os.clock() - S.chgT < 0.1 then return end
-    S.chgT = os.clock()
-    local host, key = chargeTarget()
-    if not host then return end
-    local v = State.chargePct
-    if key then
-        local cur = host:GetAttribute(key)
-        if type(cur) == "number" and cur <= 1.5 then v = v / 100 end
-        safe(function() host:SetAttribute(key, v) end)
-    else
-        local cur = host.Value
-        if type(cur) == "number" and cur <= 1.5 then v = v / 100 end
-        safe(function() host.Value = v end)
     end
 end
 
@@ -1638,6 +1616,7 @@ bind(LP.CharacterAdded:Connect(function()
     S.chgHost = nil
     S.chgKey = nil
     if State.pinMeter then task.delay(1.5, function() if State.pinMeter then safe(buildPins) end end) end
+    task.delay(1.2, function() safe(applyPow) end)
 end))
 local function colorOf(pl)
     if pl.Team and LP.Team then
@@ -1730,8 +1709,11 @@ local function stepDraw(dt)
         safe(applyTpl)
     end
     safe(applyLive)
-    safe(applyCharge)
-    if State.autoAbility then safe(pressAbility) end
+
+    if State.alwaysPower and os.clock() - S.powT > 0.15 then
+        S.powT = os.clock()
+        safe(applyPow)
+    end
 
     if State.pinMeter then
         if os.clock() - S.pinT > 0.2 then
@@ -1742,6 +1724,8 @@ local function stepDraw(dt)
     elseif #S.pins > 0 then
         safe(clearPins)
     end
+
+    if State.autoAbility then safe(pressAbility) end
 
     local ch = LP.Character
     local hum = ch and ch:FindFirstChildOfClass("Humanoid")
@@ -1969,11 +1953,6 @@ local function stepDraw(dt)
                 UI.meterNote.TextColor3 = C.dim
             end
         end
-        if UI.chgNote then
-            UI.chgNote.Text = S.chgHost
-                and ("alvo: " .. S.chgHost.Name .. (S.chgKey and ("." .. S.chgKey) or ""))
-                or "alvo nao encontrado"
-        end
         if UI.abilNote then
             UI.abilNote.Text = S.abilBtn and ("botao: " .. S.abilBtn.Name) or "sem botao · usa tecla Q"
         end
@@ -1992,16 +1971,16 @@ local function stepDraw(dt)
         S.hbMode = hbmode
         local rd = ball and ballRoot(ball)
         local aviso = S.supported and "" or " · FORA DO JOGO"
-        local pin = #S.pins > 0 and (" · barra " .. #S.pins) or ""
+        local pow = State.alwaysPower and (" · forca " .. State.powMult .. "x") or ""
         local run = S.runOn and (S.runJumped and " · PULO" or " · CORRENDO") or ""
         if rd then
-            UI.stLbl.Text = ("%s · %.1f st · v %.0f\nhits %d · hb %s %dx · tilt %s%s%s%s"):format(
+            UI.stLbl.Text = ("%s · %.1f st · v %.0f\nhits %d · hb %s %dx%s%s%s"):format(
                 ball.Name, (rd.Position - r.Position).Magnitude, S.vel.Magnitude, S.hits,
-                hbmode, State.hbMult, TILTS[State.tiltMode], pin, run, aviso)
+                hbmode, State.hbMult, pow, run, aviso)
             UI.stLbl.TextColor3 = C.text
         else
             UI.stLbl.Text = ("sem bola · hb %s %dx%s%s\nentre em partida"):format(
-                hbmode, State.hbMult, pin, aviso)
+                hbmode, State.hbMult, pow, aviso)
             UI.stLbl.TextColor3 = S.supported and C.red or C.amber
         end
     end
@@ -2070,5 +2049,6 @@ task.spawn(function()
     resolveHB()
     cacheBase()
     sweepLive()
-    out("v34 pronto · place suportado:", S.supported)
+    applyPow()
+    out("v35 pronto · place suportado:", S.supported)
 end)
