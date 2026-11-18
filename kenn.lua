@@ -1,4 +1,4 @@
---[[ KENNEX HUB v46 · Volleyball Legends
+--[[ KENNEXHUB · Volleyball Legends · build definitiva
      · abas: COMBATE / VISUAL / MOVER / ACAO / MOVIM
      · v32: esfera robusta (CanTouch fixo, raio com fallback, clamp)
      · v36: GOLPE VIA REMOTE = RF.Serve/RF.Spike com potencia
@@ -9,6 +9,7 @@
      · v44: painel nasce visivel · tweens a prova de falha · vigia e cartao de erro
      · v45: fim dos campos customizados em Instance · montagem blindada
      · v46: removidos potencia infinita e forca fixa · minimizar ancorado no canto
+     · definitivo: marca KennexHub (sem numero de versao) · correcoes de bugs
 ]]
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -283,7 +284,7 @@ end
 
 --// ===================== SPLASH =====================
 local function buildLoader()
-    local gui = mk("ScreenGui", { Name = "KennexLoad", ResetOnSpawn = false,
+    local gui = mk("ScreenGui", { Name = "KennexHubLoad", ResetOnSpawn = false,
         IgnoreGuiInset = true, DisplayOrder = 10001 }, gpar)
     local back = mk("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = C.bg,
         BackgroundTransparency = 1, BorderSizePixel = 0 }, gui)
@@ -310,14 +311,14 @@ local function buildLoader()
         Text = "K", Font = Enum.Font.GothamBlack, TextSize = 17, TextColor3 = C.text }, ring)
 
     local name = mk("TextLabel", { Size = UDim2.fromOffset(190, 22), Position = UDim2.fromOffset(74, 20),
-        BackgroundTransparency = 1, Text = "KENNEX", Font = Enum.Font.GothamBlack,
+        BackgroundTransparency = 1, Text = "KennexHub", Font = Enum.Font.GothamBlack,
         TextSize = 21, TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left }, box)
     grad(name, C.accent2, C.accent, 25)
     mk("TextLabel", { Size = UDim2.fromOffset(190, 12), Position = UDim2.fromOffset(74, 44),
         BackgroundTransparency = 1, Text = "volleyball legends", Font = Enum.Font.Gotham,
         TextSize = 9, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left }, box)
     local tag = mk("TextLabel", { Size = UDim2.fromOffset(44, 14), Position = UDim2.fromOffset(74, 62),
-        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V46",
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "HUB",
         Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2 }, box)
     mk("UICorner", { CornerRadius = UDim.new(0, 5) }, tag)
     mk("UIStroke", { Color = C.accent, Thickness = 1, Transparency = 0.6 }, tag)
@@ -382,6 +383,13 @@ end
 local pages, pillOf, tabBar = {}, {}, {}
 local activeTab = 0
 local cardH, cardPg = {}, {}
+local painters = {}
+
+local function repaintKey(key)
+    local list = painters[key]
+    if not list then return end
+    for _, f in ipairs(list) do pcall(f) end
+end
 
 local function setStatus(txt, col)
     if not UI.stLbl then return end
@@ -461,9 +469,11 @@ local function switch(c, label, key, order, cb)
             { Position = on and UDim2.fromOffset(19, 2) or UDim2.fromOffset(2, 2),
               BackgroundColor3 = on and C.text or C.dim })
     end
+    painters[key] = painters[key] or {}
+    table.insert(painters[key], paint)
     row.Activated:Connect(function()
         State[key] = not State[key]
-        paint()
+        repaintKey(key)
         if cb then safe(function() cb(State[key]) end) end
     end)
     row.MouseEnter:Connect(function()
@@ -634,24 +644,19 @@ local function buildUI()
     grad(logo, C.accent2, C.accent, 45)
 
     local title = mk("TextLabel", { Size = UDim2.fromOffset(140, 16), Position = UDim2.fromOffset(42, 8),
-        BackgroundTransparency = 1, Text = "KENNEX", Font = Enum.Font.GothamBlack,
+        BackgroundTransparency = 1, Text = "KennexHub", Font = Enum.Font.GothamBlack,
         TextSize = 15, TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, head)
     grad(title, C.accent2, C.accent, 25)
     mk("TextLabel", { Size = UDim2.fromOffset(160, 10), Position = UDim2.fromOffset(42, 24),
         BackgroundTransparency = 1, Text = "one hub · multiple plays", Font = Enum.Font.Gotham,
         TextSize = 8, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, head)
-    local pill = mk("TextLabel", { Size = UDim2.fromOffset(28, 12), Position = UDim2.fromOffset(12, 31),
-        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V46",
-        Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2, ZIndex = 6 }, head)
-    mk("UICorner", { CornerRadius = UDim.new(0, 4) }, pill)
-    mk("UIStroke", { Color = C.accent, Thickness = 1, Transparency = 0.6 }, pill)
-    local dot = mk("Frame", { Size = UDim2.fromOffset(6, 6), Position = UDim2.fromOffset(45, 34),
+    local dot = mk("Frame", { Size = UDim2.fromOffset(6, 6), Position = UDim2.fromOffset(15, 37),
         BackgroundColor3 = C.red, BorderSizePixel = 0, ZIndex = 6 }, head)
     mk("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
     mk("UIStroke", { Color = C.red, Thickness = 1.5, Transparency = 0.4 }, dot)
     UI.dot = dot
 
-    local dragBar = mk("TextButton", { Size = UDim2.new(1, -74, 0, 46), BackgroundTransparency = 1,
+    local dragBar = mk("TextButton", { Size = UDim2.new(1, -70, 0, 46), BackgroundTransparency = 1,
         Text = "", AutoButtonColor = false, Active = true, ZIndex = 4 }, head)
     UI.dragBar = dragBar
 
@@ -669,8 +674,8 @@ local function buildUI()
         end)
         return b
     end
-    local offBtn = headBtn("OFF", -92, C.red, 8)
-    local minBtn = headBtn("×", -60, C.text, 16)
+    local offBtn = headBtn("OFF", -64, C.red, 8)
+    local minBtn = headBtn("×", -32, C.text, 16)
 
     local TABS = { "COMBATE", "VISUAL", "MOVER", "ACAO", "MOVIM" }
     local tabRow = mk("Frame", { Size = UDim2.new(1, -20, 0, 26), Position = UDim2.fromOffset(10, 52),
@@ -690,7 +695,7 @@ local function buildUI()
     local stLbl = mk("TextLabel", { Size = UDim2.new(1, -104, 1, -8), Position = UDim2.fromOffset(7, 4),
         BackgroundTransparency = 1, Text = "", Font = Enum.Font.Code, TextSize = 8,
         TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left,
-        TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true, Visible = false }, foot)
+        TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true, Visible = true }, foot)
     UI.stLbl = stLbl
 
     local function footBtn(txt, xoff, w, col, cb)
@@ -859,7 +864,7 @@ local function buildFallback(err)
     mk("UICorner", { CornerRadius = UDim.new(0, 12) }, f)
     mk("UIStroke", { Color = C.red, Thickness = 1.2, Transparency = 0.25 }, f)
     mk("TextLabel", { Size = UDim2.new(1, -20, 0, 16), Position = UDim2.fromOffset(10, 10),
-        BackgroundTransparency = 1, Text = "KENNEX · falha ao montar o painel",
+        BackgroundTransparency = 1, Text = "KENNEXHUB · falha ao montar o painel",
         Font = Enum.Font.GothamBold, TextSize = 9, TextColor3 = C.red,
         TextXAlignment = Enum.TextXAlignment.Left }, f)
     mk("TextLabel", { Size = UDim2.new(1, -20, 1, -40), Position = UDim2.fromOffset(10, 30),
@@ -1509,8 +1514,11 @@ local function pickAt(x, y)
     local hit = workspace:Raycast(ray.Origin, ray.Direction * 400, rp)
     if hit and hit.Instance then
         local target = hit.Instance
-        local m = target:FindFirstAncestorOfClass("Model")
-        if m and not Players:GetPlayerFromCharacter(m) then target = m end
+        if target.Name == "KNXBox" and target.Parent then target = target.Parent end
+        if ballTier(target) == 0 then
+            local m = target:FindFirstAncestorOfClass("Model")
+            if m and not Players:GetPlayerFromCharacter(m) then target = m end
+        end
         register(target)
         S.forced = target
         setBall(target)
@@ -1653,8 +1661,9 @@ end
 press = function(x, y)
     local c = cam()
     local vs = c and c.ViewportSize or Vector2.new(720, 1280)
-    x = math.clamp(x, 2, vs.X - 2)
-    y = math.clamp(y, 2, vs.Y - 2)
+    local ins = GuiService:GetGuiInset()
+    x = math.clamp(x, 2, vs.X + ins.X - 2)
+    y = math.clamp(y, 2, vs.Y + ins.Y - 2)
     local h = math.max(State.hold, 0.012)
     safe(function() VIM:SendMouseMoveEvent(x, y, game) end)
     safe(function() VIM:SendMouseButtonEvent(x, y, 0, true, game, 0) end)
@@ -1716,7 +1725,10 @@ pressPoint = function()
     if not r then return nil end
     if State.mode == 1 then
         local v = c:WorldToViewportPoint(r.Position)
-        if v.Z > 0 then return Vector2.new(v.X, v.Y) end
+        if v.Z > 0 then
+            local ins = GuiService:GetGuiInset()
+            return Vector2.new(v.X + ins.X, v.Y + ins.Y)
+        end
         return btnPoint() or S.manual
     elseif State.mode == 2 then
         return btnPoint() or S.manual
@@ -2080,6 +2092,7 @@ local function stepDraw(dt)
 
     if State.esp then
         local drawn = 0
+        local seen = {}
         for _, pl in ipairs(Players:GetPlayers()) do
             if drawn < 12 and pl ~= LP and pl.Character then
                 local hrp = pl.Character:FindFirstChild("HumanoidRootPart")
@@ -2093,6 +2106,7 @@ local function stepDraw(dt)
                         local col = colorOf(pl)
                         if on and pos.Z > 0 then
                             drawn += 1
+                            seen[pl] = true
                             local pct = math.clamp(h2.Health / math.max(h2.MaxHealth, 1), 0, 1)
                             local hpc = D3.solo:Lerp(D3.enemy, 1 - pct)
                             e.box.set(pos.X, pos.Y + 4, col, true)
@@ -2115,6 +2129,9 @@ local function stepDraw(dt)
                     hideEsp(espObj[pl])
                 end
             end
+        end
+        for pl, e in pairs(espObj) do
+            if not seen[pl] then hideEsp(e) end
         end
     else
         for _, e in pairs(espObj) do hideEsp(e) end
@@ -2229,5 +2246,5 @@ task.spawn(function()
     task.wait(0.14)
 
     finish()
-    out("v46 pronto · place suportado:", S.supported)
+    out("KennexHub pronto · place suportado:", S.supported)
 end)
