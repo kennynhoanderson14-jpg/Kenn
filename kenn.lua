@@ -1,7 +1,7 @@
---[[ KENNEX HUB v30 · Volleyball Legends
+--[[ KENNEX HUB v31 · Volleyball Legends
      · abas: COMBATE / VISUAL / MOVER / ACAO / MOVIM
-     · MOVIM: auto habilidade, carga forcada (TSH), tilt de corte (Sanju)
-     · poderes por atributo movidos para COMBATE · MODO e BOLA no rodape
+     · v31: cartoes com AutomaticSize + build por pagina isolado
+     · v31: movimento corrigido (rot no ar, cooldown de pulo, restore de ws/jp)
      · hitbox = esfera cliente na bola · releaseAll por hide()
 ]]
 local Players    = game:GetService("Players")
@@ -37,7 +37,7 @@ local GAMES = { [6931042565] = true }
 
 local CFG = { cd = 0.09, lead = 0.14, pad = 0.5, scan = 0.3,
     maxModelMag = 30, maxModelParts = 60, maxCand = 40, radCap = 6,
-    maxHBmag = 12, maxOut = 24, minHBmag = 0.1, eps = 0.02 }
+    maxHBmag = 12, maxOut = 24, minHBmag = 0.1, eps = 0.02, jumpCd = 0.4 }
 
 local S = {
     alive = true, ball = nil, box = nil, prev = nil, vel = Vector3.zero,
@@ -47,6 +47,7 @@ local S = {
     gravBase = workspace.Gravity, supported = false, camActive = false, camBase = nil,
     abilBtn = nil, abilT = 0, abilScanT = 0, chgT = 0, chgKey = nil, chgHost = nil,
     tiltHold = 0, netCache = nil, netT = 0, abilFail = 0,
+    jumpT = 0, wsBase = nil, jpBase = nil, rotBase = nil,
 }
 
 local function bind(c) S.conns[#S.conns + 1] = c; return c end
@@ -214,37 +215,24 @@ local function showTab(i)
     end
 end
 
-local function bump(pg, h)
-    pg.h += h + 6
-    pg.list.Size = UDim2.new(1, 0, 0, pg.h)
-    pg.scroll.CanvasSize = UDim2.new(0, 0, 0, pg.h + 16)
-end
-
-local function addRow(c, h)
-    cardH[c] = (cardH[c] or 16) + h + 6
-    c.Size = UDim2.new(1, 0, 0, cardH[c])
-    local pg = cardPg[c]
-    if pg then bump(pg, h) end
-end
+local function bump() end
+local function addRow() end
 
 local function card(pg, order, label)
-    local c = mk("Frame", { Size = UDim2.new(1, 0, 0, 16), BackgroundColor3 = C.card,
+    local c = mk("Frame", { Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = C.card,
         BorderSizePixel = 0, LayoutOrder = order }, pg.list)
     mk("UICorner", { CornerRadius = UDim.new(0, 12) }, c)
     mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.35 }, c)
     mk("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, c)
     mk("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
         PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, c)
-    cardH[c] = 16
-    cardPg[c] = pg
     if label then
         mk("TextLabel", { Size = UDim2.new(1, 0, 0, 15), BackgroundTransparency = 1,
             Text = "  " .. label, Font = Enum.Font.GothamBold, TextSize = 8,
             TextColor3 = C.accent2, TextXAlignment = Enum.TextXAlignment.Left,
             LayoutOrder = 0 }, c)
-        cardH[c] += 15
     end
-    c.Size = UDim2.new(1, 0, 0, cardH[c])
     return c
 end
 
@@ -275,7 +263,6 @@ local function switch(c, label, key, order, cb)
         if cb then safe(function() cb(State[key]) end) end
     end)
     paint()
-    addRow(c, 30)
 end
 
 local function slider(c, label, key, order, min, max, fmt, step, cb)
@@ -329,7 +316,6 @@ local function slider(c, label, key, order, min, max, fmt, step, cb)
         if i.UserInputType == Enum.UserInputType.Touch
             or i.UserInputType == Enum.UserInputType.MouseMovement then fromX(i.Position.X) end
     end)
-    addRow(c, 37)
 end
 
 local function button(c, txt, order, cb, col)
@@ -339,7 +325,6 @@ local function button(c, txt, order, cb, col)
     mk("UICorner", { CornerRadius = UDim.new(0, 9) }, b)
     mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.55 }, b)
     b.Activated:Connect(function() safe(cb) end)
-    addRow(c, 28)
     return b
 end
 
@@ -348,7 +333,6 @@ local function note(c, txt, order, col)
         Text = txt, Font = Enum.Font.Gotham, TextSize = 8, TextColor3 = col or C.dim,
         TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
         LayoutOrder = order }, c)
-    addRow(c, 22)
     return l
 end
 
@@ -357,8 +341,11 @@ local function makePage(i)
         Visible = false }, UI.content)
     local scroll = mk("ScrollingFrame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
         BorderSizePixel = 0, ScrollBarThickness = 2, ScrollBarImageColor3 = C.accent,
-        CanvasSize = UDim2.new(0, 0, 0, 0) }, page)
-    local list = mk("Frame", { Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1 }, scroll)
+        CanvasSize = UDim2.new(0, 0, 0, 0),
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        ScrollingDirection = Enum.ScrollingDirection.Y }, page)
+    local list = mk("Frame", { Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1 }, scroll)
     mk("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, list)
     mk("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8) }, list)
     pages[i] = { page = page, scroll = scroll, list = list, h = 16 }
@@ -412,7 +399,7 @@ local function buildUI()
         BackgroundTransparency = 1, Text = "one hub · multiple plays", Font = Enum.Font.Gotham,
         TextSize = 8, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, head)
     local pill = mk("TextLabel", { Size = UDim2.fromOffset(28, 12), Position = UDim2.fromOffset(12, 31),
-        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V30",
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V31",
         Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2, ZIndex = 6 }, head)
     mk("UICorner", { CornerRadius = UDim.new(0, 4) }, pill)
     local dot = mk("Frame", { Size = UDim2.fromOffset(6, 6), Position = UDim2.fromOffset(45, 34),
@@ -551,7 +538,19 @@ end
 local function buildPages()
     local function pg(i) return pages[i] end
 
-    do -- COMBATE
+    local function block(name, fn)
+        local ok, e = pcall(fn)
+        if not ok then
+            out("FALHA CARD", name, tostring(e))
+            local p = pages[1]
+            if p then
+                local c = card(p, 90, name)
+                note(c, "erro: " .. tostring(e), 1, C.red)
+            end
+        end
+    end
+
+    block("COMBATE", function()
         local p = pg(1)
         local c1 = card(p, 1, "HITBOX")
         switch(c1, "HITBOX LIGADA", "hbOn", 1, function(on)
@@ -585,9 +584,9 @@ local function buildPages()
         attr("GameSpeedMultiplier", "VELOCIDADE", 1.5, 0.05, 7, c3)
         attr("GameJumpPowerMultiplier", "FORCA PULO", 5, 0.1, 8, c3)
         attr("GameDiveSpeedMultiplier", "VELOCIDADE DIVE", 5, 0.1, 9, c3)
-    end
+    end)
 
-    do -- VISUAL
+    block("VISUAL", function()
         local p = pg(2)
         local c1 = card(p, 1, "LEITURA DA BOLA")
         switch(c1, "ANEL", "ring", 1)
@@ -600,24 +599,27 @@ local function buildPages()
         local c3 = card(p, 3, "RENDER")
         switch(c3, "USAR DRAWING", "useDraw", 1, function() if rebuildDraw then rebuildDraw() end end)
         note(c3, "drawing costuma ser mais leve que frame", 2)
-    end
+    end)
 
-    do -- MOVER
+    block("MOVER", function()
         local p = pg(3)
         local c1 = card(p, 1, "AEREOS")
         switch(c1, "GIRAR NO AR", "autoRot", 1)
         switch(c1, "AUTO PULO", "jump", 2)
+        note(c1, "girar no ar forca o corpo a acompanhar a camera durante o salto", 3)
         local c2 = card(p, 2, "GRAVIDADE")
         switch(c2, "GRAVIDADE", "gravOn", 1)
         slider(c2, "GRAVIDADE %", "gravPct", 2, 1, 100, function(v) return v .. "%" end, 1)
+        note(c2, "afeta a bola tambem, nao so voce", 3)
         local c3 = card(p, 3, "CORPO")
         switch(c3, "WALKSPEED", "wsOn", 1)
         slider(c3, "WALKSPEED", "ws", 2, 1, 100, function(v) return v .. "" end, 1)
         switch(c3, "JUMPPOWER", "jpOn", 3)
         slider(c3, "JUMPPOWER", "jp", 4, 1, 200, function(v) return v .. "" end, 1)
-    end
+        note(c3, "desligar devolve o valor original do jogo", 5)
+    end)
 
-    do -- ACAO
+    block("ACAO", function()
         local p = pg(4)
         local c1 = card(p, 1, "AUTOMACAO")
         switch(c1, "AUTO RECEPCAO", "autoRecv", 1)
@@ -625,16 +627,16 @@ local function buildPages()
         local c2 = card(p, 2, "LEITURA DE QUEDA")
         slider(c2, "RAIO DE QUEDA", "reach", 1, 2, 25, function(v) return v .. "st" end)
         slider(c2, "ALTURA SPIKE", "spikeH", 2, 2, 20, function(v) return v .. "st" end)
-        note(c2, "o clique sai quando a bola cai dentro do raio", 3)
-    end
+        slider(c2, "RAIO SPIKE", "spikeR", 3, 2, 25, function(v) return v .. "st" end)
+        note(c2, "o clique sai quando a bola cai dentro do raio", 4)
+    end)
 
-    do -- MOVIM
+    block("MOVIM", function()
         local p = pg(5)
         local c1 = card(p, 1, "HABILIDADE")
         switch(c1, "AUTO HABILIDADE", "autoAbility", 1)
         slider(c1, "INTERVALO", "abilDelay", 2, 0.15, 5, function(v) return ("%.2fs"):format(v) end, 0.05)
-        UI.abilNote = note(c1, "aciona a habilidade do estilo (Sanju, TSH, Kijo...)",
-            3)
+        UI.abilNote = note(c1, "aciona a habilidade do estilo (Sanju, TSH, Kijo...)", 3)
         local c2 = card(p, 2, "CARGA")
         switch(c2, "CARGA FORCADA", "forceCharge", 1)
         slider(c2, "CARGA %", "chargePct", 2, 10, 100, function(v) return v .. "%" end, 1)
@@ -647,7 +649,7 @@ local function buildPages()
             S.tiltHold = os.clock() + 0.4
         end)
         note(c3, "RETA = pela lateral · DIAGONAL = cruzado · INVERTIDO = troca o lado · REDE = toque na rede", 2)
-    end
+    end)
 
     showTab(1)
 end
@@ -1334,12 +1336,16 @@ local function doAttack()
 end
 
 local function doJump()
+    local now = os.clock()
+    if now - S.jumpT < CFG.jumpCd then return end
     local ch = LP.Character
     local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-    if hum and hum:GetState() ~= Enum.HumanoidStateType.Jumping
-        and hum:GetState() ~= Enum.HumanoidStateType.Freefall then
-        safe(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
-    end
+    if not hum then return end
+    local st = hum:GetState()
+    if st == Enum.HumanoidStateType.Jumping or st == Enum.HumanoidStateType.Freefall then return end
+    if st == Enum.HumanoidStateType.Seated or st == Enum.HumanoidStateType.Dead then return end
+    S.jumpT = now
+    safe(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
 end
 
 local function landPoint(pos, vel)
@@ -1480,9 +1486,36 @@ local function stepDraw(dt)
     local ch = LP.Character
     local hum = ch and ch:FindFirstChildOfClass("Humanoid")
     if hum then
-        if State.wsOn and math.abs(hum.WalkSpeed - State.ws) > 0.1 then hum.WalkSpeed = State.ws end
-        if State.jpOn and math.abs(hum.JumpPower - State.jp) > 0.1 then hum.JumpPower = State.jp end
-        if State.autoRot and not hum.AutoRotate then hum.AutoRotate = true end
+        if State.wsOn then
+            if not S.wsBase then S.wsBase = hum.WalkSpeed end
+            if math.abs(hum.WalkSpeed - State.ws) > 0.1 then hum.WalkSpeed = State.ws end
+        elseif S.wsBase then
+            if math.abs(hum.WalkSpeed - S.wsBase) > 0.1 then hum.WalkSpeed = S.wsBase end
+            S.wsBase = nil
+        end
+        if State.jpOn then
+            if not S.jpBase then
+                S.jpBase = hum.UseJumpPower and hum.JumpPower or hum.JumpHeight
+            end
+            if hum.UseJumpPower then
+                if math.abs(hum.JumpPower - State.jp) > 0.1 then hum.JumpPower = State.jp end
+            else
+                local v = State.jp / 5
+                if math.abs(hum.JumpHeight - v) > 0.1 then hum.JumpHeight = v end
+            end
+        elseif S.jpBase then
+            if hum.UseJumpPower then hum.JumpPower = S.jpBase else hum.JumpHeight = S.jpBase end
+            S.jpBase = nil
+        end
+        local st = hum:GetState()
+        local air = st == Enum.HumanoidStateType.Freefall or st == Enum.HumanoidStateType.Jumping
+        if State.autoRot then
+            if S.rotBase == nil then S.rotBase = hum.AutoRotate end
+            if air and not hum.AutoRotate then hum.AutoRotate = true end
+        elseif S.rotBase ~= nil then
+            if hum.AutoRotate ~= S.rotBase then hum.AutoRotate = S.rotBase end
+            S.rotBase = nil
+        end
     end
     if State.gravOn then
         local g = S.gravBase * (State.gravPct / 100)
@@ -1683,6 +1716,17 @@ genv.__KNX = function()
     hbBase = {}
     killBox()
     if math.abs(workspace.Gravity - S.gravBase) > 0.1 then workspace.Gravity = S.gravBase end
+    local ch = LP.Character
+    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+    if hum then
+        if S.wsBase then pcall(function() hum.WalkSpeed = S.wsBase end) end
+        if S.jpBase then
+            pcall(function()
+                if hum.UseJumpPower then hum.JumpPower = S.jpBase else hum.JumpHeight = S.jpBase end
+            end)
+        end
+        if S.rotBase ~= nil then pcall(function() hum.AutoRotate = S.rotBase end) end
+    end
     for _, list in pairs(pool) do
         for _, o in ipairs(list) do pcall(function() o.rm() end) end
     end
@@ -1714,5 +1758,5 @@ task.spawn(function()
     resolveHB()
     cacheBase()
     sweepLive()
-    out("v30 pronto · place suportado:", S.supported)
+    out("v31 pronto · place suportado:", S.supported)
 end)
