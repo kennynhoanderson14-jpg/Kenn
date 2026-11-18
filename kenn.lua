@@ -1,4 +1,4 @@
---[[ KENNEX HUB v44 · Volleyball Legends
+--[[ KENNEX HUB v45 · Volleyball Legends
      · abas: COMBATE / VISUAL / MOVER / ACAO / MOVIM
      · v32: esfera robusta (CanTouch fixo, raio com fallback, clamp)
      · v36: GOLPE VIA REMOTE = RF.Serve/RF.Spike com potencia infinita
@@ -7,6 +7,7 @@
      · v42: passe de visual — splash, chrome do painel, glow e chips no desenho
      · v43: splash refeito e boot sem travamento · barra fixa removida
      · v44: painel nasce visivel · tweens a prova de falha · vigia e cartao de erro
+     · v45: fim dos campos customizados em Instance (bug das abas) · montagem blindada
 ]]
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -113,12 +114,11 @@ local function mk(cls, props, par)
             if k == "Parent" then p = v else pcall(function() o[k] = v end) end
         end
     end
-    if p then o.Parent = p end
+    if p then pcall(function() o.Parent = p end) end
     return o
 end
 local function safe(f) local ok, e = pcall(f); if not ok then out("ERRO", e) end return ok end
 
--- animacao a prova de falha
 local function tw(obj, info, props)
     if not obj then return nil end
     local ok, t = pcall(function() return Tween:Create(obj, info, props) end)
@@ -317,7 +317,7 @@ local function buildLoader()
         BackgroundTransparency = 1, Text = "volleyball legends", Font = Enum.Font.Gotham,
         TextSize = 9, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left }, box)
     local tag = mk("TextLabel", { Size = UDim2.fromOffset(44, 14), Position = UDim2.fromOffset(74, 62),
-        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V44",
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V45",
         Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2 }, box)
     mk("UICorner", { CornerRadius = UDim.new(0, 5) }, tag)
     mk("UIStroke", { Color = C.accent, Thickness = 1, Transparency = 0.6 }, tag)
@@ -379,7 +379,7 @@ local function buildLoader()
 end
 
 --// ===================== DASHBOARD =====================
-local pages, pillOf = {}, {}
+local pages, pillOf, tabBar = {}, {}, {}
 local activeTab = 0
 local cardH, cardPg = {}, {}
 
@@ -392,13 +392,16 @@ end
 local function showTab(i)
     if activeTab == i then return end
     activeTab = i
-    for k, p in pairs(pages) do p.page.Visible = (k == i) end
+    for k, p in pairs(pages) do
+        if p and p.page then p.page.Visible = (k == i) end
+    end
     for k, b in pairs(pillOf) do
         local on = k == i
         tw(b, TweenInfo.new(0.14), { BackgroundColor3 = on and C.accent or C.card })
         b.TextColor3 = on and C.text or C.dim
-        if b.bar then
-            tw(b.bar, TweenInfo.new(0.16), { BackgroundTransparency = on and 0 or 1 })
+        local bar = tabBar[k]
+        if bar then
+            tw(bar, TweenInfo.new(0.16), { BackgroundTransparency = on and 0 or 1 })
         end
     end
 end
@@ -407,9 +410,10 @@ local function bump() end
 local function addRow() end
 
 local function card(pg, order, label)
+    local par = (pg and pg.list) or UI.content
     local c = mk("Frame", { Size = UDim2.new(1, 0, 0, 0),
         AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = C.card,
-        BorderSizePixel = 0, LayoutOrder = order }, pg.list)
+        BorderSizePixel = 0, LayoutOrder = order }, par)
     mk("UICorner", { CornerRadius = UDim.new(0, 12) }, c)
     mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.3 }, c)
     mk("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, c)
@@ -564,6 +568,7 @@ local function note(c, txt, order, col)
 end
 
 local function makePage(i)
+    if not UI.content then return nil end
     local page = mk("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
         Visible = false }, UI.content)
     local scroll = mk("ScrollingFrame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
@@ -576,6 +581,7 @@ local function makePage(i)
     mk("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }, list)
     mk("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8) }, list)
     pages[i] = { page = page, scroll = scroll, list = list, h = 16 }
+    return pages[i]
 end
 
 local ballRoot, pressPoint, press, restoreAll, rebuildDraw, servePath
@@ -635,7 +641,7 @@ local function buildUI()
         BackgroundTransparency = 1, Text = "one hub · multiple plays", Font = Enum.Font.Gotham,
         TextSize = 8, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, head)
     local pill = mk("TextLabel", { Size = UDim2.fromOffset(28, 12), Position = UDim2.fromOffset(12, 31),
-        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V44",
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V45",
         Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2, ZIndex = 6 }, head)
     mk("UICorner", { CornerRadius = UDim.new(0, 4) }, pill)
     mk("UIStroke", { Color = C.accent, Thickness = 1, Transparency = 0.6 }, pill)
@@ -751,19 +757,22 @@ local function buildUI()
     offBtn.Activated:Connect(function() if genv.__KNX then genv.__KNX() end end)
 
     for i, name in ipairs(TABS) do
-        local b = mk("TextButton", { Size = UDim2.new(0.2, -4, 1, 0), BackgroundColor3 = C.card,
-            BorderSizePixel = 0, Text = name, Font = Enum.Font.GothamBold, TextSize = 8,
-            TextColor3 = C.dim, AutoButtonColor = false, LayoutOrder = i }, tabRow)
-        mk("UICorner", { CornerRadius = UDim.new(1, 0) }, b)
-        mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.5 }, b)
-        local bar = mk("Frame", { Size = UDim2.new(0.6, 0, 0, 2),
-            AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -3),
-            BackgroundColor3 = C.text, BorderSizePixel = 0, BackgroundTransparency = 1 }, b)
-        mk("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
-        b.bar = bar
-        b.Activated:Connect(function() showTab(i) end)
-        pillOf[i] = b
-        makePage(i)
+        local ok = pcall(function()
+            local b = mk("TextButton", { Size = UDim2.new(0.2, -4, 1, 0), BackgroundColor3 = C.card,
+                BorderSizePixel = 0, Text = name, Font = Enum.Font.GothamBold, TextSize = 8,
+                TextColor3 = C.dim, AutoButtonColor = false, LayoutOrder = i }, tabRow)
+            mk("UICorner", { CornerRadius = UDim.new(1, 0) }, b)
+            mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.5 }, b)
+            local bar = mk("Frame", { Size = UDim2.new(0.6, 0, 0, 2),
+                AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -3),
+                BackgroundColor3 = C.text, BorderSizePixel = 0, BackgroundTransparency = 1 }, b)
+            mk("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
+            tabBar[i] = bar
+            b.Activated:Connect(function() showTab(i) end)
+            pillOf[i] = b
+        end)
+        if not ok then out("FALHA NA ABA", name) end
+        safe(function() makePage(i) end)
     end
 
     local drag, st, off, target = false, nil, nil, nil
@@ -834,17 +843,18 @@ end
 
 --// ===================== CONTEUDO =====================
 local function buildPages()
+    for i = 1, 5 do
+        if not pages[i] then safe(function() makePage(i) end) end
+    end
+
     local function pg(i) return pages[i] end
 
     local function block(name, fn)
         local ok, e = pcall(fn)
         if not ok then
             out("FALHA CARD", name, tostring(e))
-            local p = pages[1]
-            if p then
-                local c = card(p, 90, name)
-                note(c, "erro: " .. tostring(e), 1, C.red)
-            end
+            local c = card(pages[1], 90, name)
+            note(c, "erro: " .. tostring(e), 1, C.red)
         end
     end
 
@@ -2233,5 +2243,5 @@ task.spawn(function()
     task.wait(0.14)
 
     finish()
-    out("v44 pronto · place suportado:", S.supported)
+    out("v45 pronto · place suportado:", S.supported)
 end)
