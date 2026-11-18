@@ -1,4 +1,4 @@
---[[ KENNEX HUB v33 · Volleyball Legends
+--[[ KENNEX HUB v34 · Volleyball Legends
      · abas: COMBATE / VISUAL / MOVER / ACAO / MOVIM
      · v31: cartoes com AutomaticSize + build por pagina isolado
      · v31: movimento corrigido (rot no ar, cooldown de pulo, restore de ws/jp)
@@ -8,8 +8,9 @@
      · v32: bloco da bola isolado em safe (nao derruba ESP)
      · v32: registro de bola renova timestamp · alvo forcado expira
      · v33: SUPER SPIKE (TSH) = corre reto, pula e bate com a barra cheia
-     · v33: modo de segurar botao para estilos de carga por hold
-     · v33: carga por atributo tambem le NumberValue/IntValue
+     · v34: TRAVAR BARRA = pin por sinal de mudanca (atributo ou ValueBase)
+     · v34: escala da barra aprendida sozinha (0-1 ou 0-100)
+     · v34: W nao e mais solto se voce ja estiver segurando (sem travamento)
 ]]
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -56,7 +57,8 @@ local S = {
     tiltHold = 0, netCache = nil, netT = 0, abilFail = 0,
     jumpT = 0, wsBase = nil, jpBase = nil, rotBase = nil,
     charging = false, runOn = false, runStart = 0, runEnd = 0, runJumped = false,
-    runDone = 0, runWs = nil, superDone = 0,
+    runDone = 0, runWs = nil, runKey = false,
+    pins = {}, pinConns = {}, meterList = {}, meterT = 0, pinT = 0,
 }
 
 local function bind(c) S.conns[#S.conns + 1] = c; return c end
@@ -74,6 +76,7 @@ local State = {
     autoAbility = false, abilDelay = 0.35, forceCharge = false, chargePct = 100,
     tiltMode = 1,
     superSpike = false, runTime = 0.7, runSpeed = 28,
+    pinMeter = false, pinPct = 100,
     holdCharge = false, chargeHold = 0.5,
 }
 local MODES = { "CLIQUE NA BOLA", "BOTAO", "MANUAL" }
@@ -362,7 +365,7 @@ local function makePage(i)
     pages[i] = { page = page, scroll = scroll, list = list, h = 16 }
 end
 
-local ballRoot, pressPoint, press, restoreAll, rebuildDraw, servePath
+local ballRoot, pressPoint, press, restoreAll, rebuildDraw, servePath, stopRun
 
 local function buildUI()
     local vs = Vector2.new(800, 450)
@@ -410,7 +413,7 @@ local function buildUI()
         BackgroundTransparency = 1, Text = "one hub · multiple plays", Font = Enum.Font.Gotham,
         TextSize = 8, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, head)
     local pill = mk("TextLabel", { Size = UDim2.fromOffset(28, 12), Position = UDim2.fromOffset(12, 31),
-        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V33",
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V34",
         Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2, ZIndex = 6 }, head)
     mk("UICorner", { CornerRadius = UDim.new(0, 4) }, pill)
     local dot = mk("Frame", { Size = UDim2.fromOffset(6, 6), Position = UDim2.fromOffset(45, 34),
@@ -636,32 +639,41 @@ local function buildPages()
         switch(c1, "AUTO RECEPCAO", "autoRecv", 1)
         switch(c1, "AUTO SPIKE", "autoSpike", 2)
 
-        local c2 = card(p, 2, "SUPER SPIKE · TSH")
-        switch(c2, "SUPER SPIKE", "superSpike", 1)
-        slider(c2, "TEMPO DE CORRIDA", "runTime", 2, 0.15, 1.5,
+        local c2 = card(p, 2, "BARRA CHEIA · TSH")
+        switch(c2, "TRAVAR BARRA", "pinMeter", 1, function(on)
+            if on then safe(buildPins) else safe(clearPins) end
+        end)
+        slider(c2, "VALOR DA BARRA", "pinPct", 2, 10, 100, function(v) return v .. "%" end, 1)
+        UI.meterNote = note(c2, "alvo: procurando", 3)
+        note(c2, "grampeia o valor da barra assim que o jogo escreve · nao precisa correr", 4)
+
+        local c3 = card(p, 3, "CORRER PARA ENCHER")
+        switch(c3, "CORRIDA", "superSpike", 1, function(on)
+            if not on then safe(function() stopRun(nil) end) end
+        end)
+        slider(c3, "TEMPO DE CORRIDA", "runTime", 2, 0.15, 1.5,
             function(v) return ("%.2fs"):format(v) end, 0.05)
-        slider(c2, "VELOCIDADE NA CORRIDA", "runSpeed", 3, 0, 40,
+        slider(c3, "VELOCIDADE NA CORRIDA", "runSpeed", 3, 0, 40,
             function(v) return v == 0 and "padrao" or (v .. "") end, 1)
-        note(c2, "TSH enche a barra correndo reto · o hub corre, pula e bate com a barra cheia", 4)
-        note(c2, "parar de andar esvazia a barra · pular congela · mais tempo = mais forca", 5)
+        note(c3, "reforco: corre, pula e bate · use se a barra nao for exposta", 4)
 
-        local c3 = card(p, 3, "LEITURA DE QUEDA")
-        slider(c3, "RAIO DE QUEDA", "reach", 1, 2, 25, function(v) return v .. "st" end)
-        slider(c3, "ALTURA SPIKE", "spikeH", 2, 2, 20, function(v) return v .. "st" end)
-        slider(c3, "RAIO SPIKE", "spikeR", 3, 2, 25, function(v) return v .. "st" end)
-        note(c3, "o clique sai quando a bola cai dentro do raio", 4)
+        local c4 = card(p, 4, "LEITURA DE QUEDA")
+        slider(c4, "RAIO DE QUEDA", "reach", 1, 2, 25, function(v) return v .. "st" end)
+        slider(c4, "ALTURA SPIKE", "spikeH", 2, 2, 20, function(v) return v .. "st" end)
+        slider(c4, "RAIO SPIKE", "spikeR", 3, 2, 25, function(v) return v .. "st" end)
+        note(c4, "o clique sai quando a bola cai dentro do raio", 4)
 
-        local c4 = card(p, 4, "CARGA POR SEGURAR")
-        switch(c4, "SEGURAR BOTAO", "holdCharge", 1)
-        slider(c4, "TEMPO SEGURANDO", "chargeHold", 2, 0.08, 2,
+        local c5 = card(p, 5, "CARGA POR SEGURAR")
+        switch(c5, "SEGURAR BOTAO", "holdCharge", 1)
+        slider(c5, "TEMPO SEGURANDO", "chargeHold", 2, 0.08, 2,
             function(v) return ("%.2fs"):format(v) end, 0.02)
-        note(c4, "para estilos que carregam no hold (Ronin, Jinko) · nao use com o super spike", 3)
+        note(c5, "para estilos que carregam no hold (Ronin, Jinko)", 3)
 
-        local c5 = card(p, 5, "CARGA POR ATRIBUTO")
-        switch(c5, "FORCAR ATRIBUTO", "forceCharge", 1)
-        slider(c5, "VALOR", "chargePct", 2, 10, 100, function(v) return v .. "%" end, 1)
-        UI.chgNote = note(c5, "alvo: procurando", 3)
-        note(c5, "escreve o valor da barra direto · depende do estilo expor o valor", 4)
+        local c6 = card(p, 6, "CARGA POR ATRIBUTO")
+        switch(c6, "FORCAR ATRIBUTO", "forceCharge", 1)
+        slider(c6, "VALOR", "chargePct", 2, 10, 100, function(v) return v .. "%" end, 1)
+        UI.chgNote = note(c6, "alvo: procurando", 3)
+        note(c6, "escreve o valor da barra direto · depende do estilo expor o valor", 4)
     end)
 
     block("MOVIM", function()
@@ -1163,6 +1175,104 @@ bind(UIS.InputBegan:Connect(function(i)
     if State.mode == 3 then S.manual = Vector2.new(x, y) end
 end))
 
+--// ===================== BARRA / PIN =====================
+local MKEY = { "charge", "carga", "meter", "medidor", "super", "spike", "power",
+    "bar", "fill", "energy", "boost", "forca" }
+
+local function nameHit(n)
+    n = string.lower(n)
+    for _, k in ipairs(MKEY) do
+        if string.find(n, k, 1, true) then return true end
+    end
+    return false
+end
+
+local function findMeter()
+    if os.clock() - S.meterT < 2 then return S.meterList end
+    S.meterT = os.clock()
+    local list = {}
+    local function attrs(inst, depth)
+        if not inst or #list >= 8 then return end
+        local ok, a = pcall(function() return inst:GetAttributes() end)
+        if ok and a then
+            for k, v in pairs(a) do
+                if type(v) == "number" and nameHit(k) then
+                    list[#list + 1] = { inst = inst, key = k, seen = v }
+                    if #list >= 8 then return end
+                end
+            end
+        end
+        if depth > 0 then
+            local okc, kids = pcall(function() return inst:GetChildren() end)
+            if okc and kids then
+                for _, d in ipairs(kids) do
+                    if #list >= 8 then return end
+                    attrs(d, depth - 1)
+                end
+            end
+        end
+    end
+    attrs(LP, 2)
+    local ch = LP.Character
+    if ch then attrs(ch, 2) end
+    local pg = LP:FindFirstChildOfClass("PlayerGui")
+    if pg then attrs(pg, 2) end
+    for _, root in ipairs({ LP, ch, pg }) do
+        if root and #list < 8 then
+            for _, d in ipairs(root:GetDescendants()) do
+                if #list >= 8 then break end
+                if (d:IsA("NumberValue") or d:IsA("IntValue")) and nameHit(d.Name) then
+                    list[#list + 1] = { obj = d, seen = d.Value }
+                end
+            end
+        end
+    end
+    S.meterList = list
+    return list
+end
+
+local function pinValue(p)
+    local pct = State.pinPct / 100
+    local val = p.full and State.pinPct or pct
+    if p.key then
+        safe(function() p.inst:SetAttribute(p.key, val) end)
+    elseif p.obj then
+        safe(function() p.obj.Value = val end)
+    end
+end
+
+local function clearPins()
+    for _, c in ipairs(S.pinConns) do pcall(function() c:Disconnect() end) end
+    S.pinConns = {}
+    S.pins = {}
+end
+
+local function buildPins()
+    clearPins()
+    local list = findMeter()
+    for _, p in ipairs(list) do
+        p.full = (type(p.seen) == "number" and p.seen > 1.5) or false
+        S.pins[#S.pins + 1] = p
+        local c
+        if p.key then
+            local ok, sig = pcall(function() return p.inst:GetAttributeChangedSignal(p.key) end)
+            if ok and sig then c = sig:Connect(function()
+                local now = p.inst:GetAttribute(p.key)
+                if type(now) == "number" and now > 1.5 then p.full = true end
+                pinValue(p)
+            end) end
+        elseif p.obj then
+            local ok, sig = pcall(function() return p.obj:GetPropertyChangedSignal("Value") end)
+            if ok and sig then c = sig:Connect(function()
+                if type(p.obj.Value) == "number" and p.obj.Value > 1.5 then p.full = true end
+                pinValue(p)
+            end) end
+        end
+        if c then S.pinConns[#S.pinConns + 1] = c end
+        pinValue(p)
+    end
+end
+
 --// ===================== HABILIDADE / CARGA / TILT =====================
 local ABILWORD = { "habil", "abilit", "skill", "poder", "power", "special", "ult", "estilo" }
 
@@ -1208,12 +1318,11 @@ local function pressAbility()
 end
 
 local function chargeTarget()
-    if S.chgHost and S.chgHost.Parent and (S.chgKey or not S.chgHost:IsA("ValueBase")) then
-        return S.chgHost, S.chgKey
+    if S.chgHost and S.chgHost.Parent then
+        if S.chgKey or S.chgHost:IsA("ValueBase") then return S.chgHost, S.chgKey end
     end
     S.chgKey, S.chgHost = nil, nil
-    local hosts = { LP, LP.Character }
-    for _, h in ipairs(hosts) do
+    for _, h in ipairs({ LP, LP.Character }) do
         if h then
             for key, v in pairs(h:GetAttributes()) do
                 local n = string.lower(key)
@@ -1225,8 +1334,7 @@ local function chargeTarget()
             end
         end
     end
-    local roots = { LP, LP.Character, LP:FindFirstChildOfClass("PlayerGui") }
-    for _, root in ipairs(roots) do
+    for _, root in ipairs({ LP, LP.Character, LP:FindFirstChildOfClass("PlayerGui") }) do
         if root then
             for _, d in ipairs(root:GetDescendants()) do
                 if d:IsA("NumberValue") or d:IsA("IntValue") then
@@ -1426,7 +1534,7 @@ local function doJump()
     end
 end
 
---// ===================== CORRIDA DE CARGA =====================
+--// ===================== CORRIDA =====================
 local function startRun(hum)
     if S.runOn then return end
     S.runOn = true
@@ -1437,15 +1545,31 @@ local function startRun(hum)
         S.runWs = hum.WalkSpeed
         if State.runSpeed > 0 then safe(function() hum.WalkSpeed = State.runSpeed end) end
     end
-    safe(function() VIM:SendKeyEvent(true, Enum.KeyCode.W, false, game) end)
+    if UIS:IsKeyDown(Enum.KeyCode.W) then
+        S.runKey = false
+    else
+        S.runKey = true
+        safe(function() VIM:SendKeyEvent(true, Enum.KeyCode.W, false, game) end)
+    end
 end
 
-local function stopRun(hum)
-    if not S.runOn then return end
+stopRun = function(hum)
+    if not S.runOn then
+        if S.runKey then
+            S.runKey = false
+            safe(function() VIM:SendKeyEvent(false, Enum.KeyCode.W, false, game) end)
+        end
+        return
+    end
     S.runOn = false
     S.runJumped = false
     S.runDone = os.clock()
-    safe(function() VIM:SendKeyEvent(false, Enum.KeyCode.W, false, game) end)
+    if S.runKey then
+        S.runKey = false
+        if not UIS:IsKeyDown(Enum.KeyCode.W) then
+            safe(function() VIM:SendKeyEvent(false, Enum.KeyCode.W, false, game) end)
+        end
+    end
     if hum and S.runWs then
         safe(function() hum.WalkSpeed = S.runWs end)
         S.runWs = nil
@@ -1506,6 +1630,14 @@ bind(Players.PlayerRemoving:Connect(function(pl)
         pcall(function() e.txt.rm() end); pcall(function() e.hp.rm() end); pcall(function() e.line.rm() end)
         espObj[pl] = nil
     end
+end))
+bind(LP.CharacterAdded:Connect(function()
+    safe(clearPins)
+    S.meterList = {}
+    S.meterT = 0
+    S.chgHost = nil
+    S.chgKey = nil
+    if State.pinMeter then task.delay(1.5, function() if State.pinMeter then safe(buildPins) end end) end
 end))
 local function colorOf(pl)
     if pl.Team and LP.Team then
@@ -1600,6 +1732,16 @@ local function stepDraw(dt)
     safe(applyLive)
     safe(applyCharge)
     if State.autoAbility then safe(pressAbility) end
+
+    if State.pinMeter then
+        if os.clock() - S.pinT > 0.2 then
+            S.pinT = os.clock()
+            if #S.pins == 0 then safe(buildPins) end
+            for _, p in ipairs(S.pins) do pinValue(p) end
+        end
+    elseif #S.pins > 0 then
+        safe(clearPins)
+    end
 
     local ch = LP.Character
     local hum = ch and ch:FindFirstChildOfClass("Humanoid")
@@ -1749,7 +1891,7 @@ local function stepDraw(dt)
             if State.superSpike then
                 local canStart = dist <= State.spikeR and dist >= 4
                     and (root.Position.Y - r.Position.Y) >= State.spikeH * 0.5
-                if not S.runOn and canStart and os.clock() - S.runDone > 0.25 then
+                if not S.runOn and canStart and os.clock() - S.runDone > 0.3 then
                     startRun(hum)
                 end
                 if S.runOn then
@@ -1771,6 +1913,8 @@ local function stepDraw(dt)
                 stopRun(hum)
             end
         end)
+    elseif S.runOn then
+        stopRun(hum)
     end
 
     if State.esp then
@@ -1814,6 +1958,17 @@ local function stepDraw(dt)
 
     if os.clock() - S.uiT > 0.25 and UI.stLbl then
         S.uiT = os.clock()
+        if UI.meterNote then
+            if #S.pins > 0 then
+                local p = S.pins[1]
+                UI.meterNote.Text = "alvo: " .. (p.key or (p.obj and p.obj.Name) or "?")
+                    .. (p.full and " · escala 100" or " · escala 1")
+                UI.meterNote.TextColor3 = C.green
+            else
+                UI.meterNote.Text = State.pinMeter and "alvo: procurando" or "alvo: desligado"
+                UI.meterNote.TextColor3 = C.dim
+            end
+        end
         if UI.chgNote then
             UI.chgNote.Text = S.chgHost
                 and ("alvo: " .. S.chgHost.Name .. (S.chgKey and ("." .. S.chgKey) or ""))
@@ -1837,14 +1992,16 @@ local function stepDraw(dt)
         S.hbMode = hbmode
         local rd = ball and ballRoot(ball)
         local aviso = S.supported and "" or " · FORA DO JOGO"
+        local pin = #S.pins > 0 and (" · barra " .. #S.pins) or ""
         local run = S.runOn and (S.runJumped and " · PULO" or " · CORRENDO") or ""
         if rd then
-            UI.stLbl.Text = ("%s · %.1f st · v %.0f\nhits %d · hb %s %dx · tilt %s%s%s"):format(
+            UI.stLbl.Text = ("%s · %.1f st · v %.0f\nhits %d · hb %s %dx · tilt %s%s%s%s"):format(
                 ball.Name, (rd.Position - r.Position).Magnitude, S.vel.Magnitude, S.hits,
-                hbmode, State.hbMult, TILTS[State.tiltMode], run, aviso)
+                hbmode, State.hbMult, TILTS[State.tiltMode], pin, run, aviso)
             UI.stLbl.TextColor3 = C.text
         else
-            UI.stLbl.Text = ("sem bola · hb %s %dx%s\nentre em partida"):format(hbmode, State.hbMult, aviso)
+            UI.stLbl.Text = ("sem bola · hb %s %dx%s%s\nentre em partida"):format(
+                hbmode, State.hbMult, pin, aviso)
             UI.stLbl.TextColor3 = S.supported and C.red or C.amber
         end
     end
@@ -1867,6 +2024,7 @@ genv.__KNX = function()
     S.tier = {}
     hbBase = {}
     killBox()
+    clearPins()
     local ch = LP.Character
     local hum = ch and ch:FindFirstChildOfClass("Humanoid")
     stopRun(hum)
@@ -1912,5 +2070,5 @@ task.spawn(function()
     resolveHB()
     cacheBase()
     sweepLive()
-    out("v33 pronto · place suportado:", S.supported)
+    out("v34 pronto · place suportado:", S.supported)
 end)
