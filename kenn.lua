@@ -1,17 +1,11 @@
---[[ KENNEX HUB v41 · Volleyball Legends
+--[[ KENNEX HUB v42 · Volleyball Legends
      · abas: COMBATE / VISUAL / MOVER / ACAO / MOVIM
-     · v31: cartoes com AutomaticSize + build por pagina isolado
-     · v31: movimento corrigido (rot no ar, cooldown de pulo, restore de ws/jp)
-     · hitbox = esfera cliente na bola · releaseAll por hide()
      · v32: esfera robusta (CanTouch fixo, raio com fallback, clamp)
-     · v32: trajetoria com exclusao da bola inteira + guarda de tempo
-     · v32: bloco da bola isolado em safe (nao derruba ESP)
-     · v32: registro de bola renova timestamp · alvo forcado expira
      · v34: TRAVAR BARRA = pin por sinal de mudanca (atributo ou ValueBase)
-     · v34: escala da barra aprendida sozinha (0-1 ou 0-100)
      · v36: GOLPE VIA REMOTE = RF.Serve/RF.Spike com potencia infinita
      · v40: charge e TSH sem carga removidos
      · v41: removidos card PODER, status do rodape, corrida automatica e hook de rede
+     · v42: passe de visual — splash de carga, chrome do painel, glow e chips no desenho
 ]]
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -84,11 +78,11 @@ local MODES = { "CLIQUE NA BOLA", "BOTAO", "MANUAL" }
 local TILTS = { "OFF", "RETA", "DIAGONAL", "INVERTIDO", "REDE" }
 
 local C = {
-    bg = Color3.fromRGB(10, 7, 18), surface = Color3.fromRGB(19, 13, 30),
-    card = Color3.fromRGB(23, 16, 36), inset = Color3.fromRGB(14, 10, 22),
-    line = Color3.fromRGB(46, 32, 70), accent = Color3.fromRGB(139, 92, 246),
-    accent2 = Color3.fromRGB(196, 162, 255), text = Color3.fromRGB(243, 240, 252),
-    dim = Color3.fromRGB(130, 122, 152), green = Color3.fromRGB(74, 222, 128),
+    bg = Color3.fromRGB(9, 6, 16), surface = Color3.fromRGB(20, 14, 32),
+    card = Color3.fromRGB(24, 17, 38), inset = Color3.fromRGB(14, 10, 23),
+    line = Color3.fromRGB(48, 34, 74), accent = Color3.fromRGB(139, 92, 246),
+    accent2 = Color3.fromRGB(198, 166, 255), text = Color3.fromRGB(244, 241, 253),
+    dim = Color3.fromRGB(132, 124, 156), green = Color3.fromRGB(74, 222, 128),
     red = Color3.fromRGB(248, 113, 113), amber = Color3.fromRGB(251, 191, 36),
 }
 local D3 = {
@@ -127,59 +121,90 @@ local function safe(f) local ok, e = pcall(f); if not ok then out("ERRO", e) end
 
 local UI = {}
 
+local function grad(parent, a, b, rot, t0, t1)
+    return mk("UIGradient", { Color = ColorSequence.new(a, b), Rotation = rot or 90,
+        Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, t0 or 0),
+            NumberSequenceKeypoint.new(1, t1 or 0) }) }, parent)
+end
+
 --// ===================== DESENHO =====================
-local pool = { ring = {}, dot = {}, tracer = {}, land = {}, traj = {} }
+local pool = { ring = {}, pulse = {}, dot = {}, tracer = {}, land = {}, traj = {} }
 
 local function makeCircle(col, thick, trans, filled)
     if DRAW and State.useDraw then
         local c = DRAW.new("Circle")
         c.Color = col; c.Thickness = thick or 1.5; c.NumSides = 72
         c.Filled = filled or false; c.Transparency = trans or 0.1; c.Visible = false
+        local g = DRAW.new("Circle")
+        g.Color = col; g.Thickness = (thick or 1.5) * 2.6; g.NumSides = 72
+        g.Filled = false; g.Transparency = math.min((trans or 0.1) + 0.62, 1); g.Visible = false
         return { set = function(x, y, r, cc, v)
             c.Position = Vector2.new(x, y); c.Radius = r
-            if cc then c.Color = cc end; c.Visible = v end,
-            hide = function() c.Visible = false end,
-            rm = function() pcall(function() c:Remove() end) end }
+            g.Position = Vector2.new(x, y); g.Radius = r
+            if cc then c.Color = cc; g.Color = cc end
+            c.Visible = v; g.Visible = v and not filled end,
+            hide = function() c.Visible = false; g.Visible = false end,
+            rm = function() pcall(function() c:Remove() end); pcall(function() g:Remove() end) end }
     end
+    local g = mk("Frame", { BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false }, UI.gui)
+    mk("UICorner", { CornerRadius = UDim.new(1, 0) }, g)
+    local gs = mk("UIStroke", { Color = col, Thickness = (thick or 1.5) * 2.6,
+        Transparency = math.min((trans or 0.1) + 0.62, 1) }, g)
     local f = mk("Frame", { BackgroundTransparency = filled and 0.15 or 1,
         BackgroundColor3 = col, BorderSizePixel = 0, Visible = false }, UI.gui)
     mk("UICorner", { CornerRadius = UDim.new(1, 0) }, f)
     local st
     if not filled then st = mk("UIStroke", { Color = col, Thickness = thick or 1.5 }, f) end
     return { set = function(x, y, r, cc, v)
+        local rr = r + 1.5
+        g.Size = UDim2.fromOffset(rr * 2, rr * 2); g.Position = UDim2.fromOffset(x - rr, y - rr)
         f.Size = UDim2.fromOffset(r * 2, r * 2); f.Position = UDim2.fromOffset(x - r, y - r)
         if cc then
+            gs.Color = cc
             if st then st.Color = cc else f.BackgroundColor3 = cc end
         end
-        f.Visible = v end,
-        hide = function() f.Visible = false end,
-        rm = function() pcall(function() f:Destroy() end) end }
+        f.Visible = v; g.Visible = v and not filled end,
+        hide = function() f.Visible = false; g.Visible = false end,
+        rm = function() pcall(function() f:Destroy() end); pcall(function() g:Destroy() end) end }
 end
 
-local function makeLine(col)
+local function makeLine(col, thick)
+    thick = thick or 1.2
     if DRAW and State.useDraw then
         local l = DRAW.new("Line")
-        l.Color = col; l.Thickness = 1.3; l.Transparency = 0.35; l.Visible = false
+        l.Color = col; l.Thickness = thick; l.Transparency = 0.35; l.Visible = false
+        local g = DRAW.new("Line")
+        g.Color = col; g.Thickness = thick * 2.8; g.Transparency = 0.8; g.Visible = false
         return { set = function(a, b, cc, v)
-            l.From = a; l.To = b; if cc then l.Color = cc end; l.Visible = v end,
-            hide = function() l.Visible = false end,
-            rm = function() pcall(function() l:Remove() end) end }
+            l.From = a; l.To = b; g.From = a; g.To = b
+            if cc then l.Color = cc; g.Color = cc end
+            l.Visible = v; g.Visible = v end,
+            hide = function() l.Visible = false; g.Visible = false end,
+            rm = function() pcall(function() l:Remove() end); pcall(function() g:Remove() end) end }
     end
+    local g = mk("Frame", { BackgroundColor3 = col, BorderSizePixel = 0,
+        BackgroundTransparency = 0.78, Visible = false }, UI.gui)
     local f = mk("Frame", { BackgroundColor3 = col, BorderSizePixel = 0,
-        BackgroundTransparency = 0.35, Visible = false }, UI.gui)
-    return { set = function(a, b, cc, v)
+        BackgroundTransparency = 0.3, Visible = false }, UI.gui)
+    local function put(o, a, b)
         local dv = b - a
-        f.Position = UDim2.fromOffset(a.X, a.Y); f.Size = UDim2.fromOffset(dv.Magnitude, 1)
-        f.Rotation = math.deg(math.atan2(dv.Y, dv.X))
-        if cc then f.BackgroundColor3 = cc end; f.Visible = v end,
-        hide = function() f.Visible = false end,
-        rm = function() pcall(function() f:Destroy() end) end }
+        o.Position = UDim2.fromOffset(a.X, a.Y)
+        o.Size = UDim2.fromOffset(math.max(dv.Magnitude, 1), o == g and thick * 2.8 or thick)
+        o.Rotation = math.deg(math.atan2(dv.Y, dv.X))
+    end
+    return { set = function(a, b, cc, v)
+        put(f, a, b); put(g, a, b)
+        if cc then f.BackgroundColor3 = cc; g.BackgroundColor3 = cc end
+        f.Visible = v; g.Visible = v end,
+        hide = function() f.Visible = false; g.Visible = false end,
+        rm = function() pcall(function() f:Destroy() end); pcall(function() g:Destroy() end) end }
 end
 
 local function makeText(col, sz)
+    sz = sz or 10
     if DRAW and State.useDraw then
         local t = DRAW.new("Text")
-        t.Color = col; t.Size = sz or 10; t.Center = true; t.Outline = true
+        t.Color = col; t.Size = sz; t.Center = true; t.Outline = true
         t.OutlineColor = Color3.new(0, 0, 0); t.Visible = false
         return { set = function(x, y, s, cc, v)
             t.Position = Vector2.new(x, y); t.Text = tostring(s)
@@ -187,14 +212,52 @@ local function makeText(col, sz)
             hide = function() t.Visible = false end,
             rm = function() pcall(function() t:Remove() end) end }
     end
-    local l = mk("TextLabel", { Size = UDim2.fromOffset(170, 14), BackgroundTransparency = 1,
-        Font = Enum.Font.GothamBold, TextSize = sz or 10, TextColor3 = col,
-        TextStrokeTransparency = 0.3, Visible = false }, UI.gui)
+    local holder = mk("Frame", { Size = UDim2.fromOffset(0, 0),
+        AnchorPoint = Vector2.new(0.5, 0), AutomaticSize = Enum.AutomaticSize.XY,
+        BackgroundColor3 = Color3.fromRGB(6, 4, 12), BackgroundTransparency = 0.35,
+        BorderSizePixel = 0, Visible = false }, UI.gui)
+    mk("UICorner", { CornerRadius = UDim.new(0, 6) }, holder)
+    mk("UIPadding", { PaddingLeft = UDim.new(0, 6), PaddingRight = UDim.new(0, 6),
+        PaddingTop = UDim.new(0, 2), PaddingBottom = UDim.new(0, 2) }, holder)
+    local stroke = mk("UIStroke", { Color = col, Thickness = 1, Transparency = 0.5 }, holder)
+    local lbl = mk("TextLabel", { Size = UDim2.fromOffset(0, 0),
+        AutomaticSize = Enum.AutomaticSize.XY, BackgroundTransparency = 1,
+        Font = Enum.Font.GothamBold, TextSize = sz, TextColor3 = col }, holder)
     return { set = function(x, y, s, cc, v)
-        l.Position = UDim2.fromOffset(x - 85, y); l.Text = tostring(s)
-        if cc then l.TextColor3 = cc end; l.Visible = v end,
-        hide = function() l.Visible = false end,
-        rm = function() pcall(function() l:Destroy() end) end }
+        holder.Position = UDim2.fromOffset(x, y); lbl.Text = tostring(s)
+        if cc then stroke.Color = cc; lbl.TextColor3 = cc end
+        holder.Visible = v end,
+        hide = function() holder.Visible = false end,
+        rm = function() pcall(function() holder:Destroy() end) end }
+end
+
+local function makeBox(col)
+    local f = mk("Frame", { Size = UDim2.fromOffset(40, 58), AnchorPoint = Vector2.new(0.5, 0.5),
+        BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false }, UI.gui)
+    mk("UICorner", { CornerRadius = UDim.new(0, 5) }, f)
+    local st = mk("UIStroke", { Color = col, Thickness = 1.2, Transparency = 0.35 }, f)
+    return { set = function(x, y, cc, v)
+        f.Position = UDim2.fromOffset(x, y)
+        if cc then st.Color = cc end; f.Visible = v end,
+        hide = function() f.Visible = false end,
+        rm = function() pcall(function() f:Destroy() end) end }
+end
+
+local function makeBar(col)
+    local holder = mk("Frame", { Size = UDim2.fromOffset(44, 3), AnchorPoint = Vector2.new(0.5, 0),
+        BackgroundColor3 = Color3.fromRGB(6, 4, 12), BackgroundTransparency = 0.45,
+        BorderSizePixel = 0, Visible = false }, UI.gui)
+    mk("UICorner", { CornerRadius = UDim.new(1, 0) }, holder)
+    local fill = mk("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = col,
+        BorderSizePixel = 0 }, holder)
+    mk("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
+    return { set = function(x, y, pct, cc, v)
+        holder.Position = UDim2.fromOffset(x, y)
+        fill.Size = UDim2.fromScale(math.clamp(pct or 1, 0, 1), 1)
+        if cc then fill.BackgroundColor3 = cc end
+        holder.Visible = v end,
+        hide = function() holder.Visible = false end,
+        rm = function() pcall(function() holder:Destroy() end) end }
 end
 
 local function grab(list, maker, arg)
@@ -205,6 +268,74 @@ local function releaseAll(list)
     for _, o in ipairs(list) do
         if o.busy then o.busy = false; pcall(o.hide) end
     end
+end
+
+--// ===================== SPLASH =====================
+local function buildLoader()
+    local gui = mk("ScreenGui", { Name = "KennexLoad", ResetOnSpawn = false,
+        IgnoreGuiInset = true, DisplayOrder = 10001 }, gpar)
+    local back = mk("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = C.bg,
+        BackgroundTransparency = 1, BorderSizePixel = 0 }, gui)
+    local box = mk("Frame", { Size = UDim2.fromOffset(250, 132), AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5), BackgroundColor3 = C.surface,
+        BackgroundTransparency = 1, BorderSizePixel = 0 }, back)
+    mk("UICorner", { CornerRadius = UDim.new(0, 18) }, box)
+    local bst = mk("UIStroke", { Color = C.accent, Thickness = 1.4, Transparency = 1 }, box)
+    grad(box, C.accent2, C.accent, 90, 0.9, 1)
+
+    local mark = mk("TextLabel", { Size = UDim2.fromOffset(40, 40), Position = UDim2.fromOffset(16, 16),
+        BackgroundColor3 = C.accent, BorderSizePixel = 0, Text = "K",
+        Font = Enum.Font.GothamBlack, TextSize = 22, TextColor3 = C.text }, box)
+    mk("UICorner", { CornerRadius = UDim.new(0, 11) }, mark)
+    grad(mark, C.accent2, C.accent, 45)
+
+    local name = mk("TextLabel", { Size = UDim2.fromOffset(160, 20), Position = UDim2.fromOffset(66, 18),
+        BackgroundTransparency = 1, Text = "KENNEX", Font = Enum.Font.GothamBlack,
+        TextSize = 20, TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left }, box)
+    grad(name, C.accent2, C.accent, 25)
+    mk("TextLabel", { Size = UDim2.fromOffset(160, 12), Position = UDim2.fromOffset(66, 38),
+        BackgroundTransparency = 1, Text = "volleyball legends", Font = Enum.Font.Gotham,
+        TextSize = 9, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left }, box)
+
+    local stage = mk("TextLabel", { Size = UDim2.new(1, -32, 0, 12), Position = UDim2.fromOffset(16, 76),
+        BackgroundTransparency = 1, Text = "iniciando", Font = Enum.Font.Code, TextSize = 9,
+        TextColor3 = C.accent2, TextXAlignment = Enum.TextXAlignment.Left }, box)
+    local track = mk("Frame", { Size = UDim2.new(1, -32, 0, 4), Position = UDim2.fromOffset(16, 100),
+        BackgroundColor3 = C.inset, BorderSizePixel = 0 }, box)
+    mk("UICorner", { CornerRadius = UDim.new(1, 0) }, track)
+    local fill = mk("Frame", { Size = UDim2.fromScale(0.03, 1), BackgroundColor3 = C.accent,
+        BorderSizePixel = 0 }, track)
+    mk("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
+    grad(fill, C.accent2, C.accent, 0)
+    local pct = mk("TextLabel", { Size = UDim2.fromOffset(40, 10), Position = UDim2.new(1, -46, 0, 76),
+        BackgroundTransparency = 1, Text = "0%", Font = Enum.Font.Code, TextSize = 9,
+        TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Right }, box)
+
+    Tween:Create(back, TweenInfo.new(0.28), { BackgroundTransparency = 0.02 }):Play()
+    Tween:Create(box, TweenInfo.new(0.32, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+        { BackgroundTransparency = 0.12 }):Play()
+    Tween:Create(bst, TweenInfo.new(0.32), { Transparency = 0.35 }):Play()
+
+    local api = {}
+    function api.step(txt, p)
+        if txt then stage.Text = txt end
+        if p then
+            Tween:Create(fill, TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                { Size = UDim2.fromScale(math.clamp(p, 0.03, 1), 1) }):Play()
+            pct.Text = ("%d%%"):format(math.floor(math.clamp(p, 0, 1) * 100))
+        end
+    end
+    function api.done()
+        stage.Text = "pronto"
+        pct.TextColor3 = C.green
+        Tween:Create(box, TweenInfo.new(0.26, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+            { BackgroundTransparency = 1, Position = UDim2.new(0.5, 0, 0.5, -14) }):Play()
+        Tween:Create(bst, TweenInfo.new(0.22), { Transparency = 1 }):Play()
+        Tween:Create(back, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+            { BackgroundTransparency = 1 }):Play()
+        task.delay(0.42, function() safe(function() gui:Destroy() end) end)
+    end
+    return api
 end
 
 --// ===================== DASHBOARD =====================
@@ -224,9 +355,13 @@ local function showTab(i)
     for k, p in pairs(pages) do p.page.Visible = (k == i) end
     for k, b in pairs(pillOf) do
         local on = k == i
-        Tween:Create(b, TweenInfo.new(0.12),
+        Tween:Create(b, TweenInfo.new(0.14),
             { BackgroundColor3 = on and C.accent or C.card }):Play()
         b.TextColor3 = on and C.text or C.dim
+        if b:FindFirstChild("bar") then
+            Tween:Create(b.bar, TweenInfo.new(0.16),
+                { BackgroundTransparency = on and 0 or 1 }):Play()
+        end
     end
 end
 
@@ -238,15 +373,19 @@ local function card(pg, order, label)
         AutomaticSize = Enum.AutomaticSize.Y, BackgroundColor3 = C.card,
         BorderSizePixel = 0, LayoutOrder = order }, pg.list)
     mk("UICorner", { CornerRadius = UDim.new(0, 12) }, c)
-    mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.35 }, c)
+    mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.3 }, c)
     mk("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, c)
     mk("UIPadding", { PaddingTop = UDim.new(0, 8), PaddingBottom = UDim.new(0, 8),
         PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, c)
     if label then
-        mk("TextLabel", { Size = UDim2.new(1, 0, 0, 15), BackgroundTransparency = 1,
-            Text = "  " .. label, Font = Enum.Font.GothamBold, TextSize = 8,
-            TextColor3 = C.accent2, TextXAlignment = Enum.TextXAlignment.Left,
+        local head = mk("Frame", { Size = UDim2.new(1, 0, 0, 14), BackgroundTransparency = 1,
             LayoutOrder = 0 }, c)
+        mk("Frame", { Size = UDim2.fromOffset(3, 9), Position = UDim2.fromOffset(1, 2),
+            BackgroundColor3 = C.accent, BorderSizePixel = 0 }, head)
+        grad(head:FindFirstChildOfClass("Frame"), C.accent2, C.accent, 90)
+        mk("TextLabel", { Size = UDim2.new(1, -10, 1, 0), Position = UDim2.fromOffset(9, 0),
+            BackgroundTransparency = 1, Text = label, Font = Enum.Font.GothamBold, TextSize = 8,
+            TextColor3 = C.accent2, TextXAlignment = Enum.TextXAlignment.Left }, head)
     end
     return c
 end
@@ -255,20 +394,26 @@ local function switch(c, label, key, order, cb)
     local row = mk("TextButton", { Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = C.surface,
         BorderSizePixel = 0, Text = "", AutoButtonColor = false, LayoutOrder = order }, c)
     mk("UICorner", { CornerRadius = UDim.new(0, 9) }, row)
-    mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.55 }, row)
+    local rst = mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.55 }, row)
     mk("TextLabel", { Size = UDim2.new(1, -54, 1, 0), Position = UDim2.fromOffset(10, 0),
         BackgroundTransparency = 1, Text = label, Font = Enum.Font.GothamMedium,
         TextSize = 10, TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left }, row)
     local track = mk("Frame", { Size = UDim2.fromOffset(34, 17), Position = UDim2.new(1, -44, 0.5, -8),
         BackgroundColor3 = C.inset, BorderSizePixel = 0 }, row)
     mk("UICorner", { CornerRadius = UDim.new(1, 0) }, track)
+    local tg = grad(track, C.accent2, C.accent, 0)
     local knob = mk("Frame", { Size = UDim2.fromOffset(13, 13), Position = UDim2.fromOffset(2, 2),
         BackgroundColor3 = C.dim, BorderSizePixel = 0 }, track)
     mk("UICorner", { CornerRadius = UDim.new(1, 0) }, knob)
+    local kst = mk("UIStroke", { Color = C.accent2, Thickness = 1.4, Transparency = 1 }, knob)
     local function paint()
         local on = State[key]
-        Tween:Create(track, TweenInfo.new(0.13), { BackgroundColor3 = on and C.accent or C.inset }):Play()
-        Tween:Create(knob, TweenInfo.new(0.13),
+        Tween:Create(track, TweenInfo.new(0.14), { BackgroundColor3 = on and C.accent or C.inset }):Play()
+        tg.Transparency = NumberSequence.new(on and 0 or 1)
+        Tween:Create(rst, TweenInfo.new(0.14), { Color = on and C.accent or C.line,
+            Transparency = on and 0.35 or 0.55 }):Play()
+        Tween:Create(kst, TweenInfo.new(0.14), { Transparency = on and 0.2 or 1 }):Play()
+        Tween:Create(knob, TweenInfo.new(0.14),
             { Position = on and UDim2.fromOffset(19, 2) or UDim2.fromOffset(2, 2),
               BackgroundColor3 = on and C.text or C.dim }):Play()
     end
@@ -276,6 +421,12 @@ local function switch(c, label, key, order, cb)
         State[key] = not State[key]
         paint()
         if cb then safe(function() cb(State[key]) end) end
+    end)
+    row.MouseEnter:Connect(function()
+        if not State[key] then Tween:Create(row, TweenInfo.new(0.12), { BackgroundColor3 = C.card }):Play() end
+    end)
+    row.MouseLeave:Connect(function()
+        if not State[key] then Tween:Create(row, TweenInfo.new(0.12), { BackgroundColor3 = C.surface }):Play() end
     end)
     paint()
 end
@@ -292,15 +443,18 @@ local function slider(c, label, key, order, min, max, fmt, step, cb)
         BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = tostring(State[key]),
         Font = Enum.Font.Code, TextSize = 9, TextColor3 = C.accent2 }, row)
     mk("UICorner", { CornerRadius = UDim.new(0, 5) }, val)
+    mk("UIStroke", { Color = C.accent, Thickness = 1, Transparency = 0.6 }, val)
     local track = mk("Frame", { Size = UDim2.new(1, -20, 0, 5), Position = UDim2.fromOffset(10, 25),
         BackgroundColor3 = C.inset, BorderSizePixel = 0 }, row)
     mk("UICorner", { CornerRadius = UDim.new(1, 0) }, track)
     local fill = mk("Frame", { Size = UDim2.fromScale(0.3, 1), BackgroundColor3 = C.accent,
         BorderSizePixel = 0 }, track)
     mk("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
-    local grip = mk("Frame", { Size = UDim2.fromOffset(10, 10), AnchorPoint = Vector2.new(0.5, 0.5),
+    grad(fill, C.accent2, C.accent, 0)
+    local grip = mk("Frame", { Size = UDim2.fromOffset(11, 11), AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.new(0.3, 0, 0.5, 0), BackgroundColor3 = C.text, BorderSizePixel = 0 }, track)
     mk("UICorner", { CornerRadius = UDim.new(1, 0) }, grip)
+    mk("UIStroke", { Color = C.accent2, Thickness = 1.6, Transparency = 0.25 }, grip)
     local hit = mk("TextButton", { Size = UDim2.new(1, -20, 0, 16), Position = UDim2.fromOffset(10, 19),
         BackgroundTransparency = 1, Text = "", AutoButtonColor = false }, row)
 
@@ -325,7 +479,11 @@ local function slider(c, label, key, order, min, max, fmt, step, cb)
     hit.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.Touch or i.UserInputType == Enum.UserInputType.MouseButton1 then
             fromX(i.Position.X)
+            Tween:Create(grip, TweenInfo.new(0.1), { Size = UDim2.fromOffset(15, 15) }):Play()
         end
+    end)
+    hit.InputEnded:Connect(function()
+        Tween:Create(grip, TweenInfo.new(0.12), { Size = UDim2.fromOffset(11, 11) }):Play()
     end)
     hit.InputChanged:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.Touch
@@ -338,8 +496,22 @@ local function button(c, txt, order, cb, col)
         BorderSizePixel = 0, Text = txt, Font = Enum.Font.GothamBold, TextSize = 9,
         TextColor3 = col or C.text, AutoButtonColor = false, LayoutOrder = order }, c)
     mk("UICorner", { CornerRadius = UDim.new(0, 9) }, b)
-    mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.55 }, b)
-    b.Activated:Connect(function() safe(cb) end)
+    local st = mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.55 }, b)
+    b.Activated:Connect(function()
+        safe(cb)
+        Tween:Create(b, TweenInfo.new(0.08), { BackgroundColor3 = C.card }):Play()
+        task.delay(0.1, function()
+            safe(function() Tween:Create(b, TweenInfo.new(0.14), { BackgroundColor3 = C.surface }):Play() end)
+        end)
+    end)
+    b.MouseEnter:Connect(function()
+        Tween:Create(b, TweenInfo.new(0.12), { BackgroundColor3 = C.card }):Play()
+        Tween:Create(st, TweenInfo.new(0.12), { Color = C.accent, Transparency = 0.35 }):Play()
+    end)
+    b.MouseLeave:Connect(function()
+        Tween:Create(b, TweenInfo.new(0.12), { BackgroundColor3 = C.surface }):Play()
+        Tween:Create(st, TweenInfo.new(0.12), { Color = C.line, Transparency = 0.55 }):Play()
+    end)
     return b
 end
 
@@ -382,11 +554,20 @@ local function buildUI()
         IgnoreGuiInset = true, DisplayOrder = 9999 }, gpar)
     UI.gui = gui
 
-    local win = mk("Frame", { Size = UDim2.fromOffset(W, H), Position = UDim2.fromOffset(px, py),
-        BackgroundColor3 = C.bg, BorderSizePixel = 0, Active = true, ClipsDescendants = true }, gui)
+    local shadow = mk("Frame", { Size = UDim2.fromOffset(W + 12, H + 12), AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromOffset(px + W * 0.5 + 2, py + H * 0.5 + 4),
+        BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = 0.6,
+        BorderSizePixel = 0, ZIndex = 0 }, gui)
+    mk("UICorner", { CornerRadius = UDim.new(0, 20) }, shadow)
+    UI.shadow = shadow
+
+    local win = mk("Frame", { Size = UDim2.fromOffset(W, H), AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromOffset(px + W * 0.5, py + H * 0.5),
+        BackgroundColor3 = C.bg, BorderSizePixel = 0, Active = true,
+        ClipsDescendants = true, Visible = false, ZIndex = 1 }, gui)
     UI.win = win
     mk("UICorner", { CornerRadius = UDim.new(0, 16) }, win)
-    mk("UIStroke", { Color = C.accent, Thickness = 1, Transparency = 0.45 }, win)
+    mk("UIStroke", { Color = C.accent, Thickness = 1.2, Transparency = 0.35 }, win)
 
     local head = mk("Frame", { Size = UDim2.new(1, 0, 0, 46), BackgroundColor3 = C.surface,
         BorderSizePixel = 0, ZIndex = 3, Active = true }, win)
@@ -394,32 +575,32 @@ local function buildUI()
     mk("UICorner", { CornerRadius = UDim.new(0, 16) }, head)
     mk("Frame", { Size = UDim2.new(1, 0, 0, 14), Position = UDim2.new(0, 0, 1, -14),
         BackgroundColor3 = C.surface, BorderSizePixel = 0 }, head)
-    mk("UIGradient", { Color = ColorSequence.new(C.accent2, C.accent), Rotation = 90,
-        Transparency = NumberSequence.new({ NumberSequenceKeypoint.new(0, 0.78),
-            NumberSequenceKeypoint.new(1, 1) }) }, head)
+    grad(head, C.accent2, C.accent, 90, 0.7, 1)
     mk("Frame", { Size = UDim2.new(1, 0, 0, 1), Position = UDim2.new(0, 0, 1, -1),
-        BackgroundColor3 = C.accent, BorderSizePixel = 0, BackgroundTransparency = 0.3 }, head)
+        BackgroundColor3 = C.accent, BorderSizePixel = 0, BackgroundTransparency = 0.25 }, head)
 
     local logo = mk("TextLabel", { Size = UDim2.fromOffset(24, 24), Position = UDim2.fromOffset(12, 11),
         BackgroundColor3 = C.accent, BorderSizePixel = 0, Text = "K",
         Font = Enum.Font.GothamBlack, TextSize = 14, TextColor3 = C.text, ZIndex = 6 }, head)
     mk("UICorner", { CornerRadius = UDim.new(0, 7) }, logo)
-    mk("UIGradient", { Color = ColorSequence.new(C.accent2, C.accent), Rotation = 45 }, logo)
+    grad(logo, C.accent2, C.accent, 45)
 
     local title = mk("TextLabel", { Size = UDim2.fromOffset(140, 16), Position = UDim2.fromOffset(42, 8),
         BackgroundTransparency = 1, Text = "KENNEX", Font = Enum.Font.GothamBlack,
         TextSize = 15, TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, head)
-    mk("UIGradient", { Color = ColorSequence.new(C.accent2, C.accent), Rotation = 25 }, title)
+    grad(title, C.accent2, C.accent, 25)
     mk("TextLabel", { Size = UDim2.fromOffset(160, 10), Position = UDim2.fromOffset(42, 24),
         BackgroundTransparency = 1, Text = "one hub · multiple plays", Font = Enum.Font.Gotham,
         TextSize = 8, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, head)
     local pill = mk("TextLabel", { Size = UDim2.fromOffset(28, 12), Position = UDim2.fromOffset(12, 31),
-        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V41",
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V42",
         Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2, ZIndex = 6 }, head)
     mk("UICorner", { CornerRadius = UDim.new(0, 4) }, pill)
+    mk("UIStroke", { Color = C.accent, Thickness = 1, Transparency = 0.6 }, pill)
     local dot = mk("Frame", { Size = UDim2.fromOffset(6, 6), Position = UDim2.fromOffset(45, 34),
         BackgroundColor3 = C.red, BorderSizePixel = 0, ZIndex = 6 }, head)
-mk("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
+    mk("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
+    mk("UIStroke", { Color = C.red, Thickness = 1.5, Transparency = 0.4 }, dot)
     UI.dot = dot
 
     local dragBar = mk("TextButton", { Size = UDim2.new(1, -74, 0, 46), BackgroundTransparency = 1,
@@ -432,6 +613,12 @@ mk("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
             TextSize = size or 14, TextColor3 = col or C.dim, AutoButtonColor = false, ZIndex = 7 }, head)
         mk("UICorner", { CornerRadius = UDim.new(0, 8) }, b)
         mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.4 }, b)
+        b.MouseEnter:Connect(function()
+            Tween:Create(b, TweenInfo.new(0.1), { BackgroundColor3 = C.card }):Play()
+        end)
+        b.MouseLeave:Connect(function()
+            Tween:Create(b, TweenInfo.new(0.1), { BackgroundColor3 = C.inset }):Play()
+        end)
         return b
     end
     local offBtn = headBtn("OFF", -92, C.red, 8)
@@ -452,14 +639,32 @@ mk("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
     mk("UICorner", { CornerRadius = UDim.new(0, 10) }, foot)
     mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.5 }, foot)
 
+    local stLbl = mk("TextLabel", { Size = UDim2.new(1, -104, 1, -8), Position = UDim2.fromOffset(7, 4),
+        BackgroundTransparency = 1, Text = "", Font = Enum.Font.Code, TextSize = 8,
+        TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left,
+        TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true, Visible = false }, foot)
+    UI.stLbl = stLbl
+
     local function footBtn(txt, xoff, w, col, cb)
         local b = mk("TextButton", { Size = UDim2.fromOffset(w, 24), Position = UDim2.new(1, xoff, 0.5, -12),
             BackgroundColor3 = C.surface, BorderSizePixel = 0, Text = txt,
             Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = col or C.dim,
             AutoButtonColor = false }, foot)
         mk("UICorner", { CornerRadius = UDim.new(0, 7) }, b)
-        mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.5 }, b)
-        b.Activated:Connect(function() safe(cb) end)
+        local st = mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.5 }, b)
+        b.Activated:Connect(function()
+            safe(cb)
+            Tween:Create(st, TweenInfo.new(0.1), { Color = C.accent2, Transparency = 0.2 }):Play()
+            task.delay(0.15, function()
+                safe(function() Tween:Create(st, TweenInfo.new(0.15), { Color = C.line, Transparency = 0.5 }):Play() end)
+            end)
+        end)
+        b.MouseEnter:Connect(function()
+            Tween:Create(b, TweenInfo.new(0.1), { BackgroundColor3 = C.card }):Play()
+        end)
+        b.MouseLeave:Connect(function()
+            Tween:Create(b, TweenInfo.new(0.1), { BackgroundColor3 = C.surface }):Play()
+        end)
         return b
     end
     local modeBtn = footBtn("MODO 1", -94, 46, C.text, function()
@@ -472,14 +677,15 @@ mk("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
         setStatus("TOQUE NA BOLA", C.accent2)
     end)
 
-    local icon = mk("TextButton", { Size = UDim2.fromOffset(44, 44), Position = UDim2.fromOffset(px, py),
+    local icon = mk("TextButton", { Size = UDim2.fromOffset(44, 44), AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromOffset(px + 22, py + 22),
         BackgroundColor3 = C.accent, BorderSizePixel = 0, Text = "K", Font = Enum.Font.GothamBlack,
         TextSize = 18, TextColor3 = C.text, AutoButtonColor = false, Active = true,
         Visible = false }, gui)
     UI.icon = icon
     mk("UICorner", { CornerRadius = UDim.new(1, 0) }, icon)
-    mk("UIStroke", { Color = C.accent2, Thickness = 1, Transparency = 0.3 }, icon)
-    mk("UIGradient", { Color = ColorSequence.new(C.accent2, C.accent), Rotation = 45 }, icon)
+    mk("UIStroke", { Color = C.accent2, Thickness = 1.4, Transparency = 0.25 }, icon)
+    grad(icon, C.accent2, C.accent, 45)
 
     local minimized = false
     local function setMin(v)
@@ -488,10 +694,13 @@ mk("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
             icon.Position = win.Position
             icon.Visible = true
             win.Visible = false
+            shadow.Visible = false
         else
             win.Position = icon.Position
             icon.Visible = false
             win.Visible = true
+            shadow.Visible = true
+            shadow.Position = win.Position
         end
     end
     UI.setMin = setMin
@@ -505,6 +714,11 @@ mk("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
             TextColor3 = C.dim, AutoButtonColor = false, LayoutOrder = i }, tabRow)
         mk("UICorner", { CornerRadius = UDim.new(1, 0) }, b)
         mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.5 }, b)
+        local bar = mk("Frame", { Name = "bar", Size = UDim2.new(0.6, 0, 0, 2),
+            AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -3),
+            BackgroundColor3 = C.text, BorderSizePixel = 0, BackgroundTransparency = 1 }, b)
+        mk("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
+        b.bar = bar
         b.Activated:Connect(function() showTab(i) end)
         pillOf[i] = b
         makePage(i)
@@ -521,6 +735,9 @@ mk("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
         if not drag or not target then return end
         local d = Vector2.new(x, y) - st
         target.Position = UDim2.fromOffset(off.X + d.X, off.Y + d.Y)
+        if target == win then
+            shadow.Position = UDim2.fromOffset(off.X + d.X + 2, off.Y + d.Y + 4)
+        end
     end
     local function stop()
         drag = false
@@ -540,6 +757,18 @@ mk("UICorner", { CornerRadius = UDim.new(1, 0) }, dot)
     end
     hook(dragBar, function() return win end)
     hook(icon, function() return icon end)
+
+    UI.reveal = function()
+        win.Visible = true
+        shadow.Visible = true
+        win.Size = UDim2.fromOffset(math.floor(W * 0.9), math.floor(H * 0.9))
+        win.BackgroundTransparency = 0.2
+        shadow.Size = win.Size
+        Tween:Create(win, TweenInfo.new(0.44, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+            { Size = UDim2.fromOffset(W, H), BackgroundTransparency = 0 }):Play()
+        Tween:Create(shadow, TweenInfo.new(0.44, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+            { Size = UDim2.fromOffset(W + 12, H + 12) }):Play()
+    end
 
     return true
 end
@@ -1623,13 +1852,15 @@ end
 local espObj = {}
 local function espFor(pl)
     if not espObj[pl] then
-        espObj[pl] = { txt = makeText(D3.solo, 10), hp = makeText(D3.solo, 9), line = makeLine(D3.solo) }
+        espObj[pl] = { box = makeBox(D3.solo), txt = makeText(D3.solo, 10),
+            hp = makeBar(D3.solo), line = makeLine(D3.solo, 1) }
     end
     return espObj[pl]
 end
 bind(Players.PlayerRemoving:Connect(function(pl)
     local e = espObj[pl]
     if e then
+        pcall(function() e.box.rm() end)
         pcall(function() e.txt.rm() end); pcall(function() e.hp.rm() end); pcall(function() e.line.rm() end)
         espObj[pl] = nil
     end
@@ -1650,7 +1881,7 @@ local function colorOf(pl)
 end
 local function hideEsp(e)
     if not e then return end
-    pcall(e.txt.hide); pcall(e.hp.hide); pcall(e.line.hide)
+    pcall(e.box.hide); pcall(e.txt.hide); pcall(e.hp.hide); pcall(e.line.hide)
 end
 
 --// ===================== FOV =====================
@@ -1667,12 +1898,13 @@ rebuildDraw = function()
         for i = #list, 1, -1 do list[i] = nil end
     end
     for pl, e in pairs(espObj) do
+        pcall(function() e.box.rm() end)
         pcall(function() e.txt.rm() end); pcall(function() e.hp.rm() end); pcall(function() e.line.rm() end)
         espObj[pl] = nil
     end
     if fovCircle then pcall(function() fovCircle.rm() end) end
     if fovTxt then pcall(function() fovTxt.rm() end) end
-    fovCircle = makeCircle(D3.fov, 1.2, 0.55)
+    fovCircle = makeCircle(D3.fov, 1.1, 0.6)
     fovTxt = makeText(D3.fov, 9)
 end
 
@@ -1700,7 +1932,7 @@ local function stepAim(dt)
     if show then
         local r = math.clamp(fovPixel(c, vs), 20, vs.Y)
         fovCircle.set(vs.X * 0.5, vs.Y * 0.5, r, D3.fov, true)
-        fovTxt.set(vs.X * 0.5, vs.Y * 0.5 - r - 13, ("%.0f°"):format(State.aimFov), D3.fov, true)
+        fovTxt.set(vs.X * 0.5, vs.Y * 0.5 - r - 22, ("%.0f°"):format(State.aimFov), D3.fov, true)
     end
     if not State.aim then return end
     if os.clock() < S.tiltHold then return end
@@ -1724,7 +1956,7 @@ local function stepDraw(dt)
     if not c or not r then return end
     local vs = c.ViewportSize
 
-    releaseAll(pool.ring) releaseAll(pool.dot) releaseAll(pool.tracer)
+    releaseAll(pool.ring) releaseAll(pool.pulse) releaseAll(pool.dot) releaseAll(pool.tracer)
     releaseAll(pool.land) releaseAll(pool.traj)
 
     if os.clock() - S.hbT > 0.8 then
@@ -1847,12 +2079,15 @@ local function stepDraw(dt)
                 local pr = math.abs(edge.X - pos.X)
                 if pr == pr and pr > 0 and pr < 900 then
                     local col = inside and D3.green or D3.ring
+                    local pulse = (math.sin(os.clock() * 6) * 0.5 + 0.5)
+                    grab(pool.pulse, function() return makeCircle(col, 1, 0.72) end).set(
+                        pos.X, pos.Y, math.max(pr, 9) + 5 + pulse * 5, col, true)
                     grab(pool.ring, function() return makeCircle(col, 1.5, 0.1) end).set(
                         pos.X, pos.Y, math.max(pr, 9), col, true)
                     grab(pool.dot, function() return makeCircle(col, 1, 0, true) end).set(
                         pos.X, pos.Y, 2.5, col, true)
                     grab(pool.land, makeText, D3.ring).set(pos.X,
-                        pos.Y + math.max(pr, 16) + 4, ("%.1f"):format(dist), col, true)
+                        pos.Y + math.max(pr, 16) + 8, ("%.1f"):format(dist), col, true)
                 end
             end
 
@@ -1873,8 +2108,10 @@ local function stepDraw(dt)
                     local sp = p + v * t + Vector3.new(0, -0.5 * g * t * t, 0)
                     local sps, son = c:WorldToViewportPoint(sp)
                     if son and sps.Z > 0 then
-                        grab(pool.traj, function() return makeCircle(D3.traj, 1, 0, true) end).set(
-                            sps.X, sps.Y, 2, D3.traj, true)
+                        local k = i / 12
+                        local tc = D3.traj:Lerp(D3.enemy, k)
+                        grab(pool.traj, function() return makeCircle(tc, 1, 0, true) end).set(
+                            sps.X, sps.Y, 1.6 + k * 1.6, tc, true)
                     end
                 end
             end
@@ -1885,7 +2122,12 @@ local function stepDraw(dt)
                     local edge = c:WorldToViewportPoint(lp + c.CFrame.RightVector * 3)
                     local pr = math.clamp(math.abs(edge.X - lpos.X), 6, 300)
                     grab(pool.land, makeCircle, D3.land).set(lpos.X, lpos.Y, pr, D3.land, true)
-                    grab(pool.land, makeText, D3.land).set(lpos.X, lpos.Y - pr - 12,
+                    grab(pool.land, makeCircle, D3.land).set(lpos.X, lpos.Y, 3, D3.land, true)
+                    grab(pool.land, makeLine, D3.land).set(
+                        Vector2.new(lpos.X - pr - 6, lpos.Y), Vector2.new(lpos.X - pr * 0.4, lpos.Y), D3.land, true)
+                    grab(pool.land, makeLine, D3.land).set(
+                        Vector2.new(lpos.X + pr * 0.4, lpos.Y), Vector2.new(lpos.X + pr + 6, lpos.Y), D3.land, true)
+                    grab(pool.land, makeText, D3.land).set(lpos.X, lpos.Y - pr - 22,
                         ("%.1fs"):format(ltime), D3.land, true)
                 end
             end
@@ -1915,10 +2157,13 @@ local function stepDraw(dt)
                         local col = colorOf(pl)
                         if on and pos.Z > 0 then
                             drawn += 1
-                            e.txt.set(pos.X, pos.Y - 12, ("%s · %d"):format(pl.Name, math.floor(d)), col, true)
+                            local pct = math.clamp(h2.Health / math.max(h2.MaxHealth, 1), 0, 1)
+                            local hpc = D3.solo:Lerp(D3.enemy, 1 - pct)
+                            e.box.set(pos.X, pos.Y + 4, col, true)
+                            e.txt.set(pos.X, pos.Y - 30,
+                                ("%s · %dm"):format(pl.Name, math.floor(d)), col, true)
                             if State.hp then
-                                e.hp.set(pos.X, pos.Y - 24,
-                                    ("%d"):format(math.floor(h2.Health / h2.MaxHealth * 100)), col, true)
+                                e.hp.set(pos.X, pos.Y + 30, pct, hpc, true)
                             else
                                 pcall(e.hp.hide)
                             end
@@ -1992,6 +2237,7 @@ genv.__KNX = function()
         for _, o in ipairs(list) do pcall(function() o.rm() end) end
     end
     for _, e in pairs(espObj) do
+        pcall(function() e.box.rm() end)
         pcall(function() e.txt.rm() end)
         pcall(function() e.hp.rm() end)
         pcall(function() e.line.rm() end)
@@ -2008,17 +2254,33 @@ task.spawn(function()
     S.supported = (PLACES[game.PlaceId] or GAMES[game.GameID]) and true or false
     if not S.supported then out("AVISO: place", game.PlaceId, "fora da lista") end
 
+    local load = buildLoader()
+    load.step("iniciando", 0.1)
+    task.wait(0.22)
+
     local ok, err = pcall(buildUI)
     if not ok then out("FALHA NA UI:", err) return end
+    load.step("montando painel", 0.38)
+    task.wait(0.12)
+
     local ok2, err2 = pcall(buildPages)
     if not ok2 then out("FALHA NAS PAGINAS:", err2) end
+    load.step("carregando modulos", 0.6)
 
     rebuildDraw()
     RunService:BindToRenderStep("KNX", Enum.RenderPriority.Camera.Value + 1, step)
+    load.step("lendo hitboxes", 0.78)
 
     resolveHB()
     cacheBase()
     sweepLive()
     applyPow()
-    out("v41 pronto · place suportado:", S.supported)
+    load.step("aquecendo leitura", 0.94)
+    task.wait(0.16)
+
+    load.step("pronto", 1)
+    task.wait(0.12)
+    if UI.reveal then safe(UI.reveal) end
+    load.done()
+    out("v42 pronto · place suportado:", S.supported)
 end)
