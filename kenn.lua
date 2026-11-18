@@ -1,11 +1,11 @@
---[[ KENNEX HUB v42 · Volleyball Legends
+--[[ KENNEX HUB v43 · Volleyball Legends
      · abas: COMBATE / VISUAL / MOVER / ACAO / MOVIM
      · v32: esfera robusta (CanTouch fixo, raio com fallback, clamp)
-     · v34: TRAVAR BARRA = pin por sinal de mudanca (atributo ou ValueBase)
      · v36: GOLPE VIA REMOTE = RF.Serve/RF.Spike com potencia infinita
      · v40: charge e TSH sem carga removidos
      · v41: removidos card PODER, status do rodape, corrida automatica e hook de rede
      · v42: passe de visual — splash de carga, chrome do painel, glow e chips no desenho
+     · v43: splash refeito e boot sem travamento · barra fixa removida
 ]]
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -50,8 +50,7 @@ local S = {
     gravBase = workspace.Gravity, supported = false, camActive = false, camBase = nil,
     abilBtn = nil, abilT = 0, abilScanT = 0,
     tiltHold = 0, netCache = nil, netT = 0, abilFail = 0,
-    jumpT = 0, wsBase = nil, jpBase = nil, rotBase = nil,
-    pins = {}, pinConns = {}, meterList = {}, meterT = 0, pinT = 0, powT = 0,
+    jumpT = 0, wsBase = nil, jpBase = nil, rotBase = nil, powT = 0,
     rfHits = 0, rfFail = 0,
 }
 
@@ -69,7 +68,6 @@ local State = {
     sJump = 1, sTilt = 1, sServe = 1,
     autoAbility = false, abilDelay = 0.35,
     tiltMode = 1,
-    pinMeter = false, pinPct = 100,
     alwaysPower = true, powMult = 4,
     remoteServe = false, remoteSpike = false, remoteInf = true, remotePow = 100,
     remoteDir = false,
@@ -276,61 +274,91 @@ local function buildLoader()
         IgnoreGuiInset = true, DisplayOrder = 10001 }, gpar)
     local back = mk("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = C.bg,
         BackgroundTransparency = 1, BorderSizePixel = 0 }, gui)
-    local box = mk("Frame", { Size = UDim2.fromOffset(250, 132), AnchorPoint = Vector2.new(0.5, 0.5),
+
+    local box = mk("Frame", { Size = UDim2.fromOffset(300, 186), AnchorPoint = Vector2.new(0.5, 0.5),
         Position = UDim2.fromScale(0.5, 0.5), BackgroundColor3 = C.surface,
         BackgroundTransparency = 1, BorderSizePixel = 0 }, back)
-    mk("UICorner", { CornerRadius = UDim.new(0, 18) }, box)
+    mk("UICorner", { CornerRadius = UDim.new(0, 20) }, box)
     local bst = mk("UIStroke", { Color = C.accent, Thickness = 1.4, Transparency = 1 }, box)
-    grad(box, C.accent2, C.accent, 90, 0.9, 1)
+    local tint = mk("Frame", { Size = UDim2.fromScale(1, 1), BackgroundColor3 = C.accent,
+        BorderSizePixel = 0, BackgroundTransparency = 1 }, box)
+    mk("UICorner", { CornerRadius = UDim.new(0, 20) }, tint)
+    grad(tint, C.accent2, C.accent, 90, 0.9, 1)
 
-    local mark = mk("TextLabel", { Size = UDim2.fromOffset(40, 40), Position = UDim2.fromOffset(16, 16),
-        BackgroundColor3 = C.accent, BorderSizePixel = 0, Text = "K",
-        Font = Enum.Font.GothamBlack, TextSize = 22, TextColor3 = C.text }, box)
-    mk("UICorner", { CornerRadius = UDim.new(0, 11) }, mark)
-    grad(mark, C.accent2, C.accent, 45)
+    local ring = mk("Frame", { Size = UDim2.fromOffset(42, 42), Position = UDim2.fromOffset(20, 20),
+        BackgroundTransparency = 1, BorderSizePixel = 0 }, box)
+    mk("UICorner", { CornerRadius = UDim.new(1, 0) }, ring)
+    mk("UIStroke", { Color = C.accent, Thickness = 1.4, Transparency = 0.4 }, ring)
+    local orbit = mk("Frame", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1 }, ring)
+    local bead = mk("Frame", { Size = UDim2.fromOffset(7, 7), AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(0.5, 0, 0, 0), BackgroundColor3 = C.accent2, BorderSizePixel = 0 }, orbit)
+    mk("UICorner", { CornerRadius = UDim.new(1, 0) }, bead)
+    local mark = mk("TextLabel", { Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1,
+        Text = "K", Font = Enum.Font.GothamBlack, TextSize = 17, TextColor3 = C.text }, ring)
 
-    local name = mk("TextLabel", { Size = UDim2.fromOffset(160, 20), Position = UDim2.fromOffset(66, 18),
+    local name = mk("TextLabel", { Size = UDim2.fromOffset(190, 22), Position = UDim2.fromOffset(74, 20),
         BackgroundTransparency = 1, Text = "KENNEX", Font = Enum.Font.GothamBlack,
-        TextSize = 20, TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left }, box)
+        TextSize = 21, TextColor3 = C.text, TextXAlignment = Enum.TextXAlignment.Left }, box)
     grad(name, C.accent2, C.accent, 25)
-    mk("TextLabel", { Size = UDim2.fromOffset(160, 12), Position = UDim2.fromOffset(66, 38),
+    mk("TextLabel", { Size = UDim2.fromOffset(190, 12), Position = UDim2.fromOffset(74, 44),
         BackgroundTransparency = 1, Text = "volleyball legends", Font = Enum.Font.Gotham,
         TextSize = 9, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left }, box)
+    local tag = mk("TextLabel", { Size = UDim2.fromOffset(44, 14), Position = UDim2.fromOffset(74, 62),
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V43",
+        Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2 }, box)
+    mk("UICorner", { CornerRadius = UDim.new(0, 5) }, tag)
+    mk("UIStroke", { Color = C.accent, Thickness = 1, Transparency = 0.6 }, tag)
 
-    local stage = mk("TextLabel", { Size = UDim2.new(1, -32, 0, 12), Position = UDim2.fromOffset(16, 76),
-        BackgroundTransparency = 1, Text = "iniciando", Font = Enum.Font.Code, TextSize = 9,
-        TextColor3 = C.accent2, TextXAlignment = Enum.TextXAlignment.Left }, box)
-    local track = mk("Frame", { Size = UDim2.new(1, -32, 0, 4), Position = UDim2.fromOffset(16, 100),
+    local track = mk("Frame", { Size = UDim2.new(1, -40, 0, 6), Position = UDim2.fromOffset(20, 112),
         BackgroundColor3 = C.inset, BorderSizePixel = 0 }, box)
     mk("UICorner", { CornerRadius = UDim.new(1, 0) }, track)
-    local fill = mk("Frame", { Size = UDim2.fromScale(0.03, 1), BackgroundColor3 = C.accent,
+    mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.6 }, track)
+    local fill = mk("Frame", { Size = UDim2.fromScale(0.02, 1), BackgroundColor3 = C.accent,
         BorderSizePixel = 0 }, track)
     mk("UICorner", { CornerRadius = UDim.new(1, 0) }, fill)
     grad(fill, C.accent2, C.accent, 0)
-    local pct = mk("TextLabel", { Size = UDim2.fromOffset(40, 10), Position = UDim2.new(1, -46, 0, 76),
+
+    local stage = mk("TextLabel", { Size = UDim2.new(1, -90, 0, 12), Position = UDim2.fromOffset(20, 126),
+        BackgroundTransparency = 1, Text = "iniciando", Font = Enum.Font.Code, TextSize = 9,
+        TextColor3 = C.accent2, TextXAlignment = Enum.TextXAlignment.Left }, box)
+    local pct = mk("TextLabel", { Size = UDim2.fromOffset(50, 12), Position = UDim2.new(1, -70, 0, 126),
         BackgroundTransparency = 1, Text = "0%", Font = Enum.Font.Code, TextSize = 9,
         TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Right }, box)
+    mk("TextLabel", { Size = UDim2.new(1, -40, 0, 12), Position = UDim2.fromOffset(20, 152),
+        BackgroundTransparency = 1, Text = "aguarde · nao feche o painel", Font = Enum.Font.Gotham,
+        TextSize = 8, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left }, box)
 
-    Tween:Create(back, TweenInfo.new(0.28), { BackgroundTransparency = 0.02 }):Play()
-    Tween:Create(box, TweenInfo.new(0.32, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
-        { BackgroundTransparency = 0.12 }):Play()
-    Tween:Create(bst, TweenInfo.new(0.32), { Transparency = 0.35 }):Play()
+    Tween:Create(back, TweenInfo.new(0.26), { BackgroundTransparency = 0 }):Play()
+    Tween:Create(box, TweenInfo.new(0.34, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+        { BackgroundTransparency = 0 }):Play()
+    Tween:Create(bst, TweenInfo.new(0.34), { Transparency = 0.25 }):Play()
+    Tween:Create(tint, TweenInfo.new(0.34), { BackgroundTransparency = 0.94 }):Play()
+    local spin = Tween:Create(orbit, TweenInfo.new(1.1, Enum.EasingStyle.Linear,
+        Enum.EasingDirection.Out, -1), { Rotation = 360 })
+    spin:Play()
 
-    local api = {}
+    local api = { finished = false }
     function api.step(txt, p)
+        if api.finished then return end
         if txt then stage.Text = txt end
         if p then
-            Tween:Create(fill, TweenInfo.new(0.24, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-                { Size = UDim2.fromScale(math.clamp(p, 0.03, 1), 1) }):Play()
+            Tween:Create(fill, TweenInfo.new(0.26, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+                { Size = UDim2.fromScale(math.clamp(p, 0.02, 1), 1) }):Play()
             pct.Text = ("%d%%"):format(math.floor(math.clamp(p, 0, 1) * 100))
         end
     end
     function api.done()
+        if api.finished then return end
+        api.finished = true
         stage.Text = "pronto"
+        pct.Text = "100%"
         pct.TextColor3 = C.green
+        stage.TextColor3 = C.green
+        pcall(function() spin:Cancel() end)
         Tween:Create(box, TweenInfo.new(0.26, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
-            { BackgroundTransparency = 1, Position = UDim2.new(0.5, 0, 0.5, -14) }):Play()
-        Tween:Create(bst, TweenInfo.new(0.22), { Transparency = 1 }):Play()
+            { BackgroundTransparency = 1, Position = UDim2.new(0.5, 0, 0.5, -16),
+              Size = UDim2.fromOffset(284, 176) }):Play()
+        Tween:Create(bst, TweenInfo.new(0.2), { Transparency = 1 }):Play()
         Tween:Create(back, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
             { BackgroundTransparency = 1 }):Play()
         task.delay(0.42, function() safe(function() gui:Destroy() end) end)
@@ -358,7 +386,7 @@ local function showTab(i)
         Tween:Create(b, TweenInfo.new(0.14),
             { BackgroundColor3 = on and C.accent or C.card }):Play()
         b.TextColor3 = on and C.text or C.dim
-        if b:FindFirstChild("bar") then
+        if b.bar then
             Tween:Create(b.bar, TweenInfo.new(0.16),
                 { BackgroundTransparency = on and 0 or 1 }):Play()
         end
@@ -380,9 +408,9 @@ local function card(pg, order, label)
     if label then
         local head = mk("Frame", { Size = UDim2.new(1, 0, 0, 14), BackgroundTransparency = 1,
             LayoutOrder = 0 }, c)
-        mk("Frame", { Size = UDim2.fromOffset(3, 9), Position = UDim2.fromOffset(1, 2),
+        local bullet = mk("Frame", { Size = UDim2.fromOffset(3, 9), Position = UDim2.fromOffset(1, 2),
             BackgroundColor3 = C.accent, BorderSizePixel = 0 }, head)
-        grad(head:FindFirstChildOfClass("Frame"), C.accent2, C.accent, 90)
+        grad(bullet, C.accent2, C.accent, 90)
         mk("TextLabel", { Size = UDim2.new(1, -10, 1, 0), Position = UDim2.fromOffset(9, 0),
             BackgroundTransparency = 1, Text = label, Font = Enum.Font.GothamBold, TextSize = 8,
             TextColor3 = C.accent2, TextXAlignment = Enum.TextXAlignment.Left }, head)
@@ -593,7 +621,7 @@ local function buildUI()
         BackgroundTransparency = 1, Text = "one hub · multiple plays", Font = Enum.Font.Gotham,
         TextSize = 8, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, head)
     local pill = mk("TextLabel", { Size = UDim2.fromOffset(28, 12), Position = UDim2.fromOffset(12, 31),
-        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V42",
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V43",
         Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2, ZIndex = 6 }, head)
     mk("UICorner", { CornerRadius = UDim.new(0, 4) }, pill)
     mk("UIStroke", { Color = C.accent, Thickness = 1, Transparency = 0.6 }, pill)
@@ -714,7 +742,7 @@ local function buildUI()
             TextColor3 = C.dim, AutoButtonColor = false, LayoutOrder = i }, tabRow)
         mk("UICorner", { CornerRadius = UDim.new(1, 0) }, b)
         mk("UIStroke", { Color = C.line, Thickness = 1, Transparency = 0.5 }, b)
-        local bar = mk("Frame", { Name = "bar", Size = UDim2.new(0.6, 0, 0, 2),
+        local bar = mk("Frame", { Size = UDim2.new(0.6, 0, 0, 2),
             AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -3),
             BackgroundColor3 = C.text, BorderSizePixel = 0, BackgroundTransparency = 1 }, b)
         mk("UICorner", { CornerRadius = UDim.new(1, 0) }, bar)
@@ -864,17 +892,10 @@ local function buildPages()
         slider(c3, "MULTIPLICADOR", "powMult", 2, 1, 200, function(v) return v .. "x" end, 1)
         note(c3, "atributo · nao gera o roxo, so muda o numero", 3)
 
-        local c4 = card(p, 4, "TRAVAR BARRA")
-        switch(c4, "TRAVAR BARRA", "pinMeter", 1, function(on)
-            if on then safe(buildPins) else safe(clearPins) end
-        end)
-        slider(c4, "VALOR DA BARRA", "pinPct", 2, 10, 100, function(v) return v .. "%" end, 1)
-        UI.meterNote = note(c4, "alvo: procurando", 3)
-
-        local c5 = card(p, 5, "LEITURA DE QUEDA")
-        slider(c5, "RAIO DE QUEDA", "reach", 1, 2, 25, function(v) return v .. "st" end)
-        slider(c5, "ALTURA SPIKE", "spikeH", 2, 2, 20, function(v) return v .. "st" end)
-        slider(c5, "RAIO SPIKE", "spikeR", 3, 2, 25, function(v) return v .. "st" end)
+        local c4 = card(p, 4, "LEITURA DE QUEDA")
+        slider(c4, "RAIO DE QUEDA", "reach", 1, 2, 25, function(v) return v .. "st" end)
+        slider(c4, "ALTURA SPIKE", "spikeH", 2, 2, 20, function(v) return v .. "st" end)
+        slider(c4, "RAIO SPIKE", "spikeR", 3, 2, 25, function(v) return v .. "st" end)
     end)
 
     block("MOVIM", function()
@@ -1497,105 +1518,6 @@ for _, k in ipairs(POWKEYS) do
     end
 end
 
---// ===================== BARRA / PIN =====================
-local MKEY = { "charge", "carga", "meter", "medidor", "super", "spike", "power",
-    "bar", "fill", "energy", "boost", "forca" }
-
-local function nameHit(n)
-    n = string.lower(n)
-    if string.sub(n, 1, 4) == "game" then return false end
-    for _, k in ipairs(MKEY) do
-        if string.find(n, k, 1, true) then return true end
-    end
-    return false
-end
-
-local function findMeter()
-    if os.clock() - S.meterT < 2 then return S.meterList end
-    S.meterT = os.clock()
-    local list = {}
-    local function attrs(inst, depth)
-        if not inst or #list >= 8 then return end
-        local ok, a = pcall(function() return inst:GetAttributes() end)
-        if ok and a then
-            for k, v in pairs(a) do
-                if type(v) == "number" and nameHit(k) then
-                    list[#list + 1] = { inst = inst, key = k, seen = v }
-                    if #list >= 8 then return end
-                end
-            end
-        end
-        if depth > 0 then
-            local okc, kids = pcall(function() return inst:GetChildren() end)
-            if okc and kids then
-                for _, d in ipairs(kids) do
-                    if #list >= 8 then return end
-                    attrs(d, depth - 1)
-                end
-            end
-        end
-    end
-    attrs(LP, 2)
-    local ch = LP.Character
-    if ch then attrs(ch, 2) end
-    local pg = LP:FindFirstChildOfClass("PlayerGui")
-    if pg then attrs(pg, 2) end
-    for _, root in ipairs({ LP, ch, pg }) do
-        if root and #list < 8 then
-            for _, d in ipairs(root:GetDescendants()) do
-                if #list >= 8 then break end
-                if (d:IsA("NumberValue") or d:IsA("IntValue")) and nameHit(d.Name) then
-                    list[#list + 1] = { obj = d, seen = d.Value }
-                end
-            end
-        end
-    end
-    S.meterList = list
-    return list
-end
-
-local function pinValue(p)
-    local pct = State.pinPct / 100
-    local val = p.full and State.pinPct or pct
-    if p.key then
-        safe(function() p.inst:SetAttribute(p.key, val) end)
-    elseif p.obj then
-        safe(function() p.obj.Value = val end)
-    end
-end
-
-local function clearPins()
-    for _, c in ipairs(S.pinConns) do pcall(function() c:Disconnect() end) end
-    S.pinConns = {}
-    S.pins = {}
-end
-
-local function buildPins()
-    clearPins()
-    local list = findMeter()
-    for _, p in ipairs(list) do
-        p.full = (type(p.seen) == "number" and p.seen > 1.5) or false
-        S.pins[#S.pins + 1] = p
-        local c
-        if p.key then
-            local ok, sig = pcall(function() return p.inst:GetAttributeChangedSignal(p.key) end)
-            if ok and sig then c = sig:Connect(function()
-                local now = p.inst:GetAttribute(p.key)
-                if type(now) == "number" and now > 1.5 then p.full = true end
-                pinValue(p)
-            end) end
-        elseif p.obj then
-            local ok, sig = pcall(function() return p.obj:GetPropertyChangedSignal("Value") end)
-            if ok and sig then c = sig:Connect(function()
-                if type(p.obj.Value) == "number" and p.obj.Value > 1.5 then p.full = true end
-                pinValue(p)
-            end) end
-        end
-        if c then S.pinConns[#S.pinConns + 1] = c end
-        pinValue(p)
-    end
-end
-
 --// ===================== HABILIDADE / TILT =====================
 local ABILWORD = { "habil", "abilit", "skill", "poder", "power", "special", "ult", "estilo" }
 
@@ -1866,11 +1788,7 @@ bind(Players.PlayerRemoving:Connect(function(pl)
     end
 end))
 bind(LP.CharacterAdded:Connect(function()
-    safe(clearPins)
-    S.meterList = {}
-    S.meterT = 0
     RFR = nil
-    if State.pinMeter then task.delay(1.5, function() if State.pinMeter then safe(buildPins) end end) end
     task.delay(1.2, function() safe(applyPow) end)
 end))
 local function colorOf(pl)
@@ -1969,16 +1887,6 @@ local function stepDraw(dt)
     if State.alwaysPower and os.clock() - S.powT > 0.15 then
         S.powT = os.clock()
         safe(applyPow)
-    end
-
-    if State.pinMeter then
-        if os.clock() - S.pinT > 0.2 then
-            S.pinT = os.clock()
-            if #S.pins == 0 then safe(buildPins) end
-            for _, p in ipairs(S.pins) do pinValue(p) end
-        end
-    elseif #S.pins > 0 then
-        safe(clearPins)
     end
 
     if State.autoAbility then safe(pressAbility) end
@@ -2186,16 +2094,6 @@ local function stepDraw(dt)
 
     if os.clock() - S.uiT > 0.25 then
         S.uiT = os.clock()
-        if UI.meterNote then
-            if #S.pins > 0 then
-                local p = S.pins[1]
-                UI.meterNote.Text = "alvo: " .. (p.key or (p.obj and p.obj.Name) or "?")
-                UI.meterNote.TextColor3 = C.green
-            else
-                UI.meterNote.Text = State.pinMeter and "alvo: procurando" or "alvo: desligado"
-                UI.meterNote.TextColor3 = C.dim
-            end
-        end
         if UI.abilNote then
             UI.abilNote.Text = S.abilBtn and ("botao: " .. S.abilBtn.Name) or "sem botao · usa tecla Q"
         end
@@ -2219,7 +2117,6 @@ genv.__KNX = function()
     S.tier = {}
     hbBase = {}
     killBox()
-    clearPins()
     local ch = LP.Character
     local hum = ch and ch:FindFirstChildOfClass("Humanoid")
     pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
@@ -2255,32 +2152,38 @@ task.spawn(function()
     if not S.supported then out("AVISO: place", game.PlaceId, "fora da lista") end
 
     local load = buildLoader()
+
+    local function finish()
+        load.step("pronto", 1)
+        task.wait(0.12)
+        if UI.reveal then safe(UI.reveal) end
+        load.done()
+    end
+
     load.step("iniciando", 0.1)
-    task.wait(0.22)
+    task.wait(0.2)
 
     local ok, err = pcall(buildUI)
-    if not ok then out("FALHA NA UI:", err) return end
-    load.step("montando painel", 0.38)
-    task.wait(0.12)
+    if not ok then out("FALHA NA UI:", err) end
+    load.step(ok and "montando painel" or "painel com falha", 0.34)
+    task.wait(0.1)
 
     local ok2, err2 = pcall(buildPages)
     if not ok2 then out("FALHA NAS PAGINAS:", err2) end
-    load.step("carregando modulos", 0.6)
+    load.step("carregando modulos", 0.58)
 
-    rebuildDraw()
+    safe(rebuildDraw)
     RunService:BindToRenderStep("KNX", Enum.RenderPriority.Camera.Value + 1, step)
     load.step("lendo hitboxes", 0.78)
+    task.wait(0.05)
 
-    resolveHB()
-    cacheBase()
-    sweepLive()
-    applyPow()
-    load.step("aquecendo leitura", 0.94)
-    task.wait(0.16)
+    safe(resolveHB)
+    safe(cacheBase)
+    safe(sweepLive)
+    safe(applyPow)
+    load.step("aquecendo leitura", 0.93)
+    task.wait(0.14)
 
-    load.step("pronto", 1)
-    task.wait(0.12)
-    if UI.reveal then safe(UI.reveal) end
-    load.done()
-    out("v42 pronto · place suportado:", S.supported)
+    finish()
+    out("v43 pronto · place suportado:", S.supported)
 end)
