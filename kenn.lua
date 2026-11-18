@@ -1,4 +1,4 @@
---[[ KENNEX HUB v36 · Volleyball Legends
+--[[ KENNEX HUB v37 · Volleyball Legends
      · abas: COMBATE / VISUAL / MOVER / ACAO / MOVIM
      · v31: cartoes com AutomaticSize + build por pagina isolado
      · v31: movimento corrigido (rot no ar, cooldown de pulo, restore de ws/jp)
@@ -13,7 +13,8 @@
      · v34: W nao e mais solto se voce ja estiver segurando (sem travamento)
      · v35: SPIKE SEMPRE CARREGADO = sobrescreve o multiplicador, ignora a barra
      · v36: GOLPE VIA REMOTE = RF.Serve/RF.Spike com potencia infinita (padrao Sterling)
-     · v36: fallback automatico para o clique se o remote nao existir
+     · v37: MULTIPLICADOR NA REDE = hook em __namecall, infla a potencia do proprio jogo
+     · v37: listador de remotes + log de chamada para diagnostico
 ]]
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -62,7 +63,7 @@ local S = {
     charging = false, runOn = false, runStart = 0, runEnd = 0, runJumped = false,
     runDone = 0, runWs = nil, runKey = false,
     pins = {}, pinConns = {}, meterList = {}, meterT = 0, pinT = 0, powT = 0,
-    rfHits = 0, rfFail = 0,
+    rfHits = 0, rfFail = 0, wireMT = nil, wireOld = nil, lastWire = nil, lastWireT = 0,
 }
 
 local function bind(c) S.conns[#S.conns + 1] = c; return c end
@@ -82,8 +83,9 @@ local State = {
     superSpike = false, runTime = 0.7, runSpeed = 28,
     pinMeter = false, pinPct = 100,
     alwaysPower = true, powMult = 8,
-    remoteServe = true, remoteSpike = true, remoteInf = true, remotePow = 100,
+    remoteServe = false, remoteSpike = false, remoteInf = true, remotePow = 100,
     remoteDir = false,
+    wireMult = true, wirePow = 3, logCalls = false,
     holdCharge = false, chargeHold = 0.5,
 }
 local MODES = { "CLIQUE NA BOLA", "BOTAO", "MANUAL" }
@@ -420,7 +422,7 @@ local function buildUI()
         BackgroundTransparency = 1, Text = "one hub · multiple plays", Font = Enum.Font.Gotham,
         TextSize = 8, TextColor3 = C.dim, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 6 }, head)
     local pill = mk("TextLabel", { Size = UDim2.fromOffset(28, 12), Position = UDim2.fromOffset(12, 31),
-        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V36",
+        BackgroundColor3 = C.inset, BorderSizePixel = 0, Text = "V37",
         Font = Enum.Font.GothamBold, TextSize = 8, TextColor3 = C.accent2, ZIndex = 6 }, head)
     mk("UICorner", { CornerRadius = UDim.new(0, 4) }, pill)
     local dot = mk("Frame", { Size = UDim2.fromOffset(6, 6), Position = UDim2.fromOffset(45, 34),
@@ -596,16 +598,16 @@ local function buildPages()
             slider(cr, label, key, order, 0, maxv, function(v) return v .. "x" end, stepv,
                 function(v) safe(function() LP:SetAttribute(key, v) end) end)
         end
-        attr("GameSpikePowerMultiplier", "FORCA SPIKE", 50, 0.1, 1, c3)
-        attr("GameServePowerMultiplier", "FORCA SAQUE", 50, 0.1, 2, c3)
-        attr("GameBumpPowerMultiplier", "FORCA BUMP", 50, 0.1, 3, c3)
-        attr("GameSetPowerMultiplier", "FORCA SET", 50, 0.1, 4, c3)
-        attr("GameBlockPowerMultiplier", "FORCA BLOQUEIO", 50, 0.1, 5, c3)
-        attr("GameTiltPowerMultiplier", "FORCA TILT", 50, 0.1, 6, c3)
+        attr("GameSpikePowerMultiplier", "FORCA SPIKE", 200, 1, 1, c3)
+        attr("GameServePowerMultiplier", "FORCA SAQUE", 200, 1, 2, c3)
+        attr("GameBumpPowerMultiplier", "FORCA BUMP", 200, 1, 3, c3)
+        attr("GameSetPowerMultiplier", "FORCA SET", 200, 1, 4, c3)
+        attr("GameBlockPowerMultiplier", "FORCA BLOQUEIO", 200, 1, 5, c3)
+        attr("GameTiltPowerMultiplier", "FORCA TILT", 200, 1, 6, c3)
         attr("GameSpeedMultiplier", "VELOCIDADE", 1.5, 0.05, 7, c3)
         attr("GameJumpPowerMultiplier", "FORCA PULO", 5, 0.1, 8, c3)
         attr("GameDiveSpeedMultiplier", "VELOCIDADE DIVE", 5, 0.1, 9, c3)
-        note(c3, "spike e saque sao dominados pelo cartao do TSH quando ele esta ligado", 10)
+        note(c3, "atributo puro · se o jogo ler no cliente, ja resolve sozinho", 10)
     end)
 
     block("VISUAL", function()
@@ -643,54 +645,60 @@ local function buildPages()
 
     block("ACAO", function()
         local p = pg(4)
-        local c1 = card(p, 1, "AUTOMACAO")
-        switch(c1, "AUTO RECEPCAO", "autoRecv", 1)
-        switch(c1, "AUTO SPIKE", "autoSpike", 2)
+        local c1 = card(p, 1, "MULTIPLICADOR NA REDE")
+        switch(c1, "INFLAR POTENCIA", "wireMult", 1)
+        slider(c1, "MULTIPLICADOR", "wirePow", 2, 1, 15, function(v) return v .. "x" end, 0.5)
+        button(c1, "LISTAR REMOTES", 3, function() safe(listRemotes) end, C.accent2)
+        switch(c1, "LOGAR CHAMADAS", "logCalls", 4)
+        UI.rfNote = note(c1, "hook no __namecall · multiplica o argumento que o jogo manda", 5)
+        note(c1, "funciona com a barra vazia porque age depois do calculo do jogo", 6)
 
-        local c2 = card(p, 2, "GOLPE VIA REMOTE")
-        switch(c2, "SPIKE NO REMOTE", "remoteSpike", 1)
-        switch(c2, "SAQUE NO REMOTE", "remoteServe", 2)
-        switch(c2, "POTENCIA INFINITA", "remoteInf", 3)
-        slider(c2, "POTENCIA", "remotePow", 4, 1, 300, function(v) return v .. "" end, 1)
-        switch(c2, "DIRECAO DA CAMERA", "remoteDir", 5)
-        UI.rfNote = note(c2, "remotes: procurando", 6)
-        note(c2, "chama RF.Serve/RF.Spike com potencia infinita · ignora a barra por completo", 7)
-        note(c2, "sem remote, cai sozinho no clique normal · tecla Z = saque", 8)
+        local c2 = card(p, 2, "AUTOMACAO")
+        switch(c2, "AUTO RECEPCAO", "autoRecv", 1)
+        switch(c2, "AUTO SPIKE", "autoSpike", 2)
 
-        local c3 = card(p, 3, "SPIKE SEMPRE CARREGADO")
-        switch(c3, "FORCA FIXA", "alwaysPower", 1)
-        slider(c3, "MULTIPLICADOR", "powMult", 2, 1, 30, function(v) return v .. "x" end, 0.5)
-        note(c3, "camada 2: sobrescreve o multiplicador do atributo", 3)
+        local c3 = card(p, 3, "CHAMAR REMOTE")
+        switch(c3, "SPIKE NO REMOTE", "remoteSpike", 1)
+        switch(c3, "SAQUE NO REMOTE", "remoteServe", 2)
+        switch(c3, "POTENCIA INFINITA", "remoteInf", 3)
+        slider(c3, "POTENCIA", "remotePow", 4, 1, 300, function(v) return v .. "" end, 1)
+        switch(c3, "DIRECAO DA CAMERA", "remoteDir", 5)
+        UI.remNote = note(c3, "alternativa · pode duplicar o golpe se o jogo ja chamar sozinho", 6)
 
-        local c4 = card(p, 4, "TRAVAR BARRA")
-        switch(c4, "TRAVAR BARRA", "pinMeter", 1, function(on)
+        local c4 = card(p, 4, "SPIKE SEMPRE CARREGADO")
+        switch(c4, "FORCA FIXA", "alwaysPower", 1)
+        slider(c4, "MULTIPLICADOR", "powMult", 2, 1, 200, function(v) return v .. "x" end, 1)
+        note(c4, "camada 2: sobrescreve o atributo do multiplicador", 3)
+
+        local c5 = card(p, 5, "TRAVAR BARRA")
+        switch(c5, "TRAVAR BARRA", "pinMeter", 1, function(on)
             if on then safe(buildPins) else safe(clearPins) end
         end)
-        slider(c4, "VALOR DA BARRA", "pinPct", 2, 10, 100, function(v) return v .. "%" end, 1)
-        UI.meterNote = note(c4, "alvo: procurando", 3)
-        note(c4, "camada 3: grampeia a barra se o jogo expuser o valor", 4)
+        slider(c5, "VALOR DA BARRA", "pinPct", 2, 10, 100, function(v) return v .. "%" end, 1)
+        UI.meterNote = note(c5, "alvo: procurando", 3)
+        note(c5, "camada 3: grampeia a barra se o jogo expuser o valor", 4)
 
-        local c5 = card(p, 5, "CORRER PARA ENCHER")
-        switch(c5, "CORRIDA", "superSpike", 1, function(on)
+        local c6 = card(p, 6, "CORRER PARA ENCHER")
+        switch(c6, "CORRIDA", "superSpike", 1, function(on)
             if not on then safe(function() stopRun(nil) end) end
         end)
-        slider(c5, "TEMPO DE CORRIDA", "runTime", 2, 0.15, 1.5,
+        slider(c6, "TEMPO DE CORRIDA", "runTime", 2, 0.15, 1.5,
             function(v) return ("%.2fs"):format(v) end, 0.05)
-        slider(c5, "VELOCIDADE NA CORRIDA", "runSpeed", 3, 0, 40,
+        slider(c6, "VELOCIDADE NA CORRIDA", "runSpeed", 3, 0, 40,
             function(v) return v == 0 and "padrao" or (v .. "") end, 1)
-        note(c5, "camada 4: corrida real, so se quiser a barra cheia de verdade", 4)
+        note(c6, "camada 4: corrida real, so se quiser a barra cheia de verdade", 4)
 
-        local c6 = card(p, 6, "LEITURA DE QUEDA")
-        slider(c6, "RAIO DE QUEDA", "reach", 1, 2, 25, function(v) return v .. "st" end)
-        slider(c6, "ALTURA SPIKE", "spikeH", 2, 2, 20, function(v) return v .. "st" end)
-        slider(c6, "RAIO SPIKE", "spikeR", 3, 2, 25, function(v) return v .. "st" end)
-        note(c6, "o clique sai quando a bola cai dentro do raio", 4)
+        local c7 = card(p, 7, "LEITURA DE QUEDA")
+        slider(c7, "RAIO DE QUEDA", "reach", 1, 2, 25, function(v) return v .. "st" end)
+        slider(c7, "ALTURA SPIKE", "spikeH", 2, 2, 20, function(v) return v .. "st" end)
+        slider(c7, "RAIO SPIKE", "spikeR", 3, 2, 25, function(v) return v .. "st" end)
+        note(c7, "o clique sai quando a bola cai dentro do raio", 4)
 
-        local c7 = card(p, 7, "CARGA POR SEGURAR")
-        switch(c7, "SEGURAR BOTAO", "holdCharge", 1)
-        slider(c7, "TEMPO SEGURANDO", "chargeHold", 2, 0.08, 2,
+        local c8 = card(p, 8, "CARGA POR SEGURAR")
+        switch(c8, "SEGURAR BOTAO", "holdCharge", 1)
+        slider(c8, "TEMPO SEGURANDO", "chargeHold", 2, 0.08, 2,
             function(v) return ("%.2fs"):format(v) end, 0.02)
-        note(c7, "para estilos que carregam no hold (Ronin, Jinko)", 3)
+        note(c8, "para estilos que carregam no hold (Ronin, Jinko)", 3)
     end)
 
     block("MOVIM", function()
@@ -792,14 +800,19 @@ servePath = function()
     return s
 end
 
---// ===================== REMOTE DE GOLPE =====================
+--// ===================== REMOTE =====================
 local RFR = nil
 local SPIKE_RF = { "Spike", "Hit", "Attack", "Cortada", "Remate", "SpikeHit", "PowerSpike" }
 
 local function rfRoot()
     if RFR and RFR.Parent then return RFR end
-    local s = servePath()
-    RFR = s and s.Parent or nil
+    local p = RS:FindFirstChild("Packages")
+    local idx = p and p:FindFirstChild("_Index")
+    local knit = idx and idx:FindFirstChild("sleitnick_knit@1.7.0")
+    local k = knit and knit:FindFirstChild("knit")
+    local sv = k and k:FindFirstChild("Services")
+    local g = sv and sv:FindFirstChild("GameService")
+    RFR = g and g:FindFirstChild("RF")
     return RFR
 end
 
@@ -816,6 +829,25 @@ local function spikeRemote()
         local o = remoteOf(n)
         if o then return o, n end
     end
+end
+
+local function listRemotes()
+    local r = rfRoot()
+    if not r then
+        setStatus("RF nao encontrado", C.red)
+        return
+    end
+    local names = {}
+    for _, d in ipairs(r:GetChildren()) do
+        names[#names + 1] = d.Name .. " (" .. d.ClassName .. ")"
+    end
+    if #names == 0 then
+        setStatus("RF vazio", C.amber)
+        return
+    end
+    out("REMOTES:", table.concat(names, " | "))
+    if UI.remNote then UI.remNote.Text = table.concat(names, ", "):sub(1, 240) end
+    setStatus("remotes no console", C.accent2)
 end
 
 local function remotePower()
@@ -851,6 +883,58 @@ local function fireRemote(which)
         return pcall(function() r:InvokeServer() end)
     end
     return pcall(function() r:FireServer(dir, p) end)
+end
+
+--// ===================== HOOK NA REDE =====================
+local WIRE = { "spike", "serve", "hit", "attack", "cortada", "remate", "saque", "golpe", "spiking" }
+local wireHooked = false
+
+local function wireName(n)
+    n = string.lower(n)
+    for _, k in ipairs(WIRE) do
+        if string.find(n, k, 1, true) then return true end
+    end
+    return false
+end
+
+local function installWire()
+    if wireHooked then return end
+    wireHooked = true
+    local ok = pcall(function()
+        local mt = getrawmetatable(game)
+        local old = mt.__namecall
+        if not old then error("sem __namecall") end
+        local nc = newcclosure or function(f) return f end
+        setreadonly(mt, false)
+        mt.__namecall = nc(function(self, ...)
+            local method = getnamecallmethod()
+            if State.wireMult and (method == "InvokeServer" or method == "FireServer") then
+                local okn, nm = pcall(function() return self.Name end)
+                if okn and type(nm) == "string" and wireName(nm) then
+                    local n = select("#", ...)
+                    local a = { ... }
+                    for i = 1, n do
+                        local v = a[i]
+                        if type(v) == "number" and v >= 0 and v <= 2.5 then
+                            local nv = v * State.wirePow
+                            a[i] = nv
+                            S.lastWire = nm .. " " .. string.format("%.2f", v) .. "→" .. string.format("%.2f", nv)
+                            S.lastWireT = os.clock()
+                            if State.logCalls then
+                                print("[KNX] WIRE", nm, method, v, "->", nv)
+                            end
+                            return old(self, table.unpack(a, 1, n))
+                        end
+                    end
+                end
+            end
+            return old(self, ...)
+        end)
+        setreadonly(mt, true)
+        S.wireMT = mt
+        S.wireOld = old
+    end)
+    if not ok then wireHooked = false end
 end
 
 --// ===================== GRUPOS DE GOLPE =====================
@@ -2049,11 +2133,13 @@ local function stepDraw(dt)
     if os.clock() - S.uiT > 0.25 and UI.stLbl then
         S.uiT = os.clock()
         if UI.rfNote then
-            local s = remoteOf("Serve")
-            local r2, rn = spikeRemote()
-            UI.rfNote.Text = ("saque: %s · spike: %s · ok %d / falha %d"):format(
-                s and "ok" or "-", rn or "-", S.rfHits, S.rfFail)
-            UI.rfNote.TextColor3 = (s or r2) and C.green or C.dim
+            if S.lastWire and os.clock() - S.lastWireT < 6 then
+                UI.rfNote.Text = "capturado: " .. S.lastWire
+                UI.rfNote.TextColor3 = C.green
+            else
+                UI.rfNote.Text = State.wireMult and ("hook ativo · " .. State.wirePow .. "x · esperando golpe") or "hook desligado"
+                UI.rfNote.TextColor3 = State.wireMult and C.dim or C.amber
+            end
         end
         if UI.meterNote then
             if #S.pins > 0 then
@@ -2084,17 +2170,16 @@ local function stepDraw(dt)
         S.hbMode = hbmode
         local rd = ball and ballRoot(ball)
         local aviso = S.supported and "" or " · FORA DO JOGO"
-        local pow = State.alwaysPower and (" · forca " .. State.powMult .. "x") or ""
-        local rf = State.remoteSpike and " · RF" or ""
+        local wire = State.wireMult and (" · rede " .. State.wirePow .. "x") or ""
         local run = S.runOn and (S.runJumped and " · PULO" or " · CORRENDO") or ""
         if rd then
-            UI.stLbl.Text = ("%s · %.1f st · v %.0f\nhits %d · hb %s %dx%s%s%s%s"):format(
+            UI.stLbl.Text = ("%s · %.1f st · v %.0f\nhits %d · hb %s %dx%s%s%s"):format(
                 ball.Name, (rd.Position - r.Position).Magnitude, S.vel.Magnitude, S.hits,
-                hbmode, State.hbMult, pow, rf, run, aviso)
+                hbmode, State.hbMult, wire, run, aviso)
             UI.stLbl.TextColor3 = C.text
         else
-            UI.stLbl.Text = ("sem bola · hb %s %dx%s%s%s\nentre em partida"):format(
-                hbmode, State.hbMult, pow, rf, aviso)
+            UI.stLbl.Text = ("sem bola · hb %s %dx%s%s\nentre em partida"):format(
+                hbmode, State.hbMult, wire, aviso)
             UI.stLbl.TextColor3 = S.supported and C.red or C.amber
         end
     end
@@ -2118,6 +2203,13 @@ genv.__KNX = function()
     hbBase = {}
     killBox()
     clearPins()
+    if S.wireMT and S.wireOld then
+        pcall(function()
+            setreadonly(S.wireMT, false)
+            S.wireMT.__namecall = S.wireOld
+            setreadonly(S.wireMT, true)
+        end)
+    end
     local ch = LP.Character
     local hum = ch and ch:FindFirstChildOfClass("Humanoid")
     stopRun(hum)
@@ -2164,5 +2256,6 @@ task.spawn(function()
     cacheBase()
     sweepLive()
     applyPow()
-    out("v36 pronto · place suportado:", S.supported)
+    installWire()
+    out("v37 pronto · hook:", wireHooked, "· place suportado:", S.supported)
 end)
