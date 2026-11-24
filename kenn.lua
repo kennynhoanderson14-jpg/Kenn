@@ -10,6 +10,7 @@
      · v45: fim dos campos customizados em Instance · montagem blindada
      · v46: removidos potencia infinita e forca fixa · minimizar ancorado no canto
      · definitivo: marca KennexHub (sem numero de versao) · correcoes de bugs
+     · antiban: afk, rejoin, rate limit, clamp de potencia, jitter
 ]]
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
@@ -18,6 +19,8 @@ local VIM        = game:GetService("VirtualInputManager")
 local GuiService = game:GetService("GuiService")
 local Tween      = game:GetService("TweenService")
 local RS         = game:GetService("ReplicatedStorage")
+local VU         = game:GetService("VirtualUser")
+local TP         = game:GetService("TeleportService")
 
 local genv = getgenv()
 local function out(...)
@@ -74,6 +77,7 @@ local State = {
     tiltMode = 1,
     remoteServe = false, remoteSpike = false, remotePow = 100,
     remoteDir = false,
+    abOn = true, abAfk = true, abRc = true, abJit = true, abClamp = true, abCd = 0.28,
 }
 local MODES = { "CLIQUE NA BOLA", "BOTAO", "MANUAL" }
 local TILTS = { "OFF", "RETA", "DIAGONAL", "INVERTIDO", "REDE" }
@@ -396,6 +400,92 @@ local function setStatus(txt, col)
     UI.stLbl.Text = txt
     if col then UI.stLbl.TextColor3 = col end
 end
+
+--// ===================== ANTIBAN =====================
+local AB = {
+    enabled = true, afk = true, reconnect = true,
+    jitter = true, clampPow = true,
+    powMin = 35, powMax = 190, rfCd = 0.28,
+    lastRF = 0, rfWindow = {}, maxRfPerSec = 5,
+    rejoins = 0, maxRejoins = 6, lastRejoin = 0, teleporting = false,
+}
+
+local function rfAllowed()
+    if not AB.enabled then return true end
+    local now = os.clock()
+    local cd = AB.rfCd * (AB.jitter and (0.85 + math.random() * 0.3) or 1)
+    if now - AB.lastRF < cd then return "cd" end
+    local n = 0
+    for i = #AB.rfWindow, 1, -1 do
+        if now - AB.rfWindow[i] > 1 then table.remove(AB.rfWindow, i) else n += 1 end
+    end
+    if n >= AB.maxRfPerSec then return "cd" end
+    return true
+end
+
+local function rfMark()
+    local now = os.clock()
+    AB.lastRF = now
+    AB.rfWindow[#AB.rfWindow + 1] = now
+end
+
+local function safePow(p)
+    p = tonumber(p) or 100
+    if not (AB.enabled and AB.clampPow) then return p end
+    return math.clamp(math.floor(p + 0.5), AB.powMin, AB.powMax)
+end
+
+local function aliveGuard()
+    local ch = LP.Character
+    local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+    return hum ~= nil and hum.Health > 0
+end
+
+bind(LP.Idled:Connect(function()
+    if not (AB.enabled and AB.afk) then return end
+    pcall(function()
+        VU:CaptureController()
+        VU:ClickButton2(Vector2.new(math.random(2, 20), math.random(2, 20)))
+    end)
+    safe(function() VIM:SendKeyEvent(true, Enum.KeyCode.Space, false, game) end)
+    task.delay(0.06, function()
+        safe(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
+    end)
+    out("anti-afk")
+end))
+
+local function rejoin(reason)
+    if not (AB.enabled and AB.reconnect) then return end
+    if AB.teleporting then return end
+    if os.clock() - AB.lastRejoin < 8 then return end
+    if AB.rejoins >= AB.maxRejoins then out("rejoin: limite") return end
+    AB.rejoins += 1
+    AB.lastRejoin = os.clock()
+    AB.teleporting = true
+    pcall(function() setStatus("reconectando: " .. tostring(reason or "?"), C.amber) end)
+    out("rejoin:", reason)
+    task.delay(1.2 + math.random() * 1.6, function()
+        pcall(function() TP:Teleport(game.PlaceId, LP) end)
+        task.delay(6, function()
+            pcall(function() TP:TeleportToPlaceInstance(game.PlaceId, game.JobId, LP) end)
+            task.delay(4, function() AB.teleporting = false end)
+        end)
+    end)
+end
+
+bind(LP.OnTeleport:Connect(function(st)
+    if st == Enum.TeleportState.Started then AB.teleporting = true end
+    if st == Enum.TeleportState.Finished then AB.teleporting = false end
+end))
+
+bind(GuiService.ErrorMessageChanged:Connect(function()
+    local m = GuiService:GetErrorMessage()
+    if m and m ~= "" then rejoin(m) end
+end))
+
+bind(LP.AncestryChanged:Connect(function(_, par)
+    if not par then rejoin("saiu") end
+end))
 
 local function showTab(i)
     if activeTab == i then return end
@@ -924,6 +1014,15 @@ local function buildPages()
         local c3 = card(p, 3, "RENDER")
         switch(c3, "USAR DRAWING", "useDraw", 1, function() if rebuildDraw then rebuildDraw() end end)
         note(c3, "drawing costuma ser mais leve que frame", 2)
+        local c4 = card(p, 4, "ANTIBAN")
+        switch(c4, "MESTRE", "abOn", 1, function(on) AB.enabled = on end)
+        switch(c4, "ANTI-AFK", "abAfk", 2, function(on) AB.afk = on end)
+        switch(c4, "RECONECTAR", "abRc", 3, function(on) AB.reconnect = on end)
+        switch(c4, "JITTER", "abJit", 4, function(on) AB.jitter = on end)
+        switch(c4, "LIMITAR POTENCIA", "abClamp", 5, function(on) AB.clampPow = on end)
+        slider(c4, "COOLDOWN REMOTE", "abCd", 6, 0.05, 1,
+            function(v) return ("%.2fs"):format(v) end, 0.01, function(v) AB.rfCd = v end)
+        note(c4, "afk · rejoin · rate limit · clamp · jitter", 7)
     end)
 
     block("MOVER", function()
@@ -1124,24 +1223,34 @@ local function camFlat()
 end
 
 local function fireRemote(which)
-    local p = State.remotePow
+    local gate = rfAllowed()
+    if gate ~= true then return "cd" end
+    local p = safePow(State.remotePow)
     if which == "serve" then
         local s = remoteOf("Serve")
         if not s then return false end
+        local ok
         if s:IsA("RemoteFunction") then
-            return pcall(function() s:InvokeServer(Vector3.zero, p) end)
+            ok = pcall(function() s:InvokeServer(Vector3.zero, p) end)
+        else
+            ok = pcall(function() s:FireServer(Vector3.zero, p) end)
         end
-        return pcall(function() s:FireServer(Vector3.zero, p) end)
+        if ok then rfMark() end
+        return ok
     end
     local r = spikeRemote()
     if not r then return false end
     local dir = State.remoteDir and camFlat() or Vector3.zero
+    local ok
     if r:IsA("RemoteFunction") then
-        if pcall(function() r:InvokeServer(dir, p) end) then return true end
-        if pcall(function() r:InvokeServer(p) end) then return true end
-        return pcall(function() r:InvokeServer() end)
+        ok = pcall(function() r:InvokeServer(dir, p) end)
+        if not ok then ok = pcall(function() r:InvokeServer(p) end) end
+        if not ok then ok = pcall(function() r:InvokeServer() end) end
+    else
+        ok = pcall(function() r:FireServer(dir, p) end)
     end
-    return pcall(function() r:FireServer(dir, p) end)
+    if ok then rfMark() end
+    return ok
 end
 
 --// ===================== GRUPOS DE GOLPE =====================
@@ -1551,9 +1660,12 @@ bind(UIS.InputBegan:Connect(function(i, gp)
     if gp then return end
     if i.KeyCode ~= Enum.KeyCode.Z then return end
     if not State.remoteServe then return end
-    if fireRemote("serve") then
+    local res = fireRemote("serve")
+    if res == true then
         S.rfHits += 1
         setStatus("saque no remote", C.green)
+    elseif res == "cd" then
+        setStatus("rate limit", C.amber)
     else
         S.rfFail += 1
         setStatus("remote de saque ausente", C.amber)
@@ -1665,6 +1777,7 @@ press = function(x, y)
     x = math.clamp(x, 2, vs.X + ins.X - 2)
     y = math.clamp(y, 2, vs.Y + ins.Y - 2)
     local h = math.max(State.hold, 0.012)
+    if AB.enabled and AB.jitter then h = h * (0.75 + math.random() * 0.6) end
     safe(function() VIM:SendMouseMoveEvent(x, y, game) end)
     safe(function() VIM:SendMouseButtonEvent(x, y, 0, true, game, 0) end)
     task.delay(h, function()
@@ -1736,9 +1849,16 @@ pressPoint = function()
     return S.manual
 end
 
+local function cdOk(now)
+    local cd = CFG.cd
+    if AB.enabled and AB.jitter then cd = cd * (0.85 + math.random() * 0.35) end
+    return (now - S.lastPress) >= cd
+end
+
 local function doAttack()
+    if not aliveGuard() then return end
     local now = os.clock()
-    if now - S.lastPress < CFG.cd then return end
+    if not cdOk(now) then return end
     local pos = pressPoint()
     if not pos then return end
     S.lastPress = now
@@ -1748,16 +1868,19 @@ local function doAttack()
 end
 
 local function doSpike()
+    if not aliveGuard() then return end
     local now = os.clock()
-    if now - S.lastPress < CFG.cd then return end
+    if not cdOk(now) then return end
     if State.tiltMode > 1 then safe(applyTilt) end
     if State.remoteSpike then
-        if fireRemote("spike") then
+        local res = fireRemote("spike")
+        if res == true then
             S.lastPress = now
             S.hits += 1
             S.rfHits += 1
             return
         end
+        if res == "cd" then return end
         S.rfFail += 1
     end
     doAttack()
@@ -1835,6 +1958,9 @@ bind(Players.PlayerRemoving:Connect(function(pl)
 end))
 bind(LP.CharacterAdded:Connect(function()
     RFR = nil
+    S.wsBase, S.jpBase, S.rotBase, S.abilBtn = nil, nil, nil, nil
+    S.camActive = false
+    AB.rejoins = 0
 end))
 local function colorOf(pl)
     if pl.Team and LP.Team then
@@ -2153,6 +2279,7 @@ end
 --// ===================== CLEANUP =====================
 genv.__KNX = function()
     S.alive = false
+    AB.enabled = false
     pcall(function() RunService:UnbindFromRenderStep("KNX") end)
     for _, c in ipairs(S.conns) do pcall(function() c:Disconnect() end) end
     S.conns = {}
